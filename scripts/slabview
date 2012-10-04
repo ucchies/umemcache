@@ -1,0 +1,70 @@
+#!/usr/bin/perl
+
+use strict;
+use IO::Socket::INET;
+use Term::Screen;
+
+#print "Hello Perl!\n";
+
+my $addr = "localhost:11211";
+print "Address: $addr\n";
+my $sock = IO::Socket::INET->new(PeerAddr => $addr,
+				Proto    => 'tcp');
+die "Could not connect." unless $sock;
+
+
+my %items;
+my $maxid;
+sub get_status {
+    print $sock "stats slabs\r\n";
+    while (<$sock>) {
+	last if /^END/;
+	if (/^STAT (\d+):(\w+) (\d+)/) {
+	    $items{$1}{$2} = $3;
+	    $maxid = $1;
+	}
+    }
+}
+
+my $scr = Term::Screen->new();
+die "Term::Screen not found." unless $scr;
+my $key = 'a';
+#my $cnt = '';
+my $old_maxid = $maxid;
+$scr->clrscr();
+$scr->at(0, 0)->puts("Slab View -- Ver 0.1\r\n");
+$scr->at(1, 0)->puts("ID   Status");
+until ($key eq 'e' || $key eq 'q') {
+    &get_status();
+    unless ($old_maxid eq $maxid) {
+	$old_maxid = $maxid;
+	$scr->at(2, 0)->clreos();
+    }
+    if ($key eq 'c') {
+	$scr->at(2, 0)->clreos();
+    }
+
+    for my $n (1..$maxid) {
+	my $it = $items{$n};
+	my $used = 1;
+	$used = $it->{used_chunks} / $it->{total_chunks} * 100 unless $it->{total_chunks} == 0;
+#	print "$used\n";
+        $used = int($used / 2);
+	my $bar = "";
+#	die "Too Large USED: $n\r\n $used\r\n $it->{used_chunks}\r\n $it->{total_chunks}\r\n" if ($used > 50);
+	for my $barlen (1..$used) {$bar .= "#";}
+	for my $freelen ($used+1..50) {$bar .= "-";}
+	$scr->at($n+1, 0)->puts(" $n  $bar");
+
+        $scr->at($maxid+2, 0)->puts("   Pages    \n");
+	$scr->at($maxid+2+$n, 0)->puts(" $n   $it->{total_pages}  $it->{used_chunks}/$it->{total_chunks}  $it->{free_chunks}");
+    }
+#   $scr->at($maxid+10, 0);
+    $key = $scr->getch() if $scr->key_pressed(1);
+#   $cnt .= '@';
+#   $scr->at($maxid+8, 0)->puts("$cnt");
+}
+
+$scr->clrscr();
+
+__END__

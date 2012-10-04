@@ -1,0 +1,123 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+use IO::Socket::INET;
+
+my $com = shift;
+my $byte;
+my $items;
+my $counter;
+my $classid;
+my $addr;
+if ($com eq 'set') {
+    $byte = shift;
+    $items = shift || 1;
+    $counter = shift || 1;
+    die "SET: $0 set <byte> [items] [counter] [host]\n" unless $byte && ($items > 0);
+}
+elsif ($com eq 'del') {
+    $classid = shift;
+    $items = shift || 1;
+    die "DEL: $0 del <class_id> [items] [host]\n" unless $classid && ($items > 0);
+}
+
+$addr = shift || "localhost:11211";
+
+my $sock = IO::Socket::INET->new(PeerAddr => $addr,
+   	   			 Proto => 'tcp');
+
+die "Could not connect to $addr\n" unless $sock;
+
+my $key_prefix = 'k';
+
+# sub find_largest_key {
+#     my $res = $items;
+#     my $factor = 10;
+#     my $sign = 0;
+#     until ($factor == 1) {
+# 	print $sock "get $key_prefix".$res."\r\n";
+# 	while (<$sock>) {
+# 	    if (/^END/) {
+# 		$factor = $factor / 2 if $sign == 1;
+# 		$factor = 1 if $factor < 1;
+# 		$res /= $factor;
+# 		$res = 1 if $res < 1;
+# 		$sign = -1;
+# 		last;
+# 	    }
+# 	    elsif (/^VALUE (\S+) (\d+) (\d+)/) {
+# 		$factor = $factor / 2 if $sign == -1;
+# 		$factor = 1 if $factor < 1;
+# 		$res *= $factor;
+# 		$sign = 1;
+# 		last;
+# 	    }
+# 	}
+# 	return 1 if $res == 1;
+# 	print "searching1:$res $factor $sign\n";
+#     }
+#     $res = int($res);
+#     my $found = 1;
+#     until ($found == 0) {
+#     	$res += $sign;
+#     	print $sock "get $key_prefix".$res."\r\n";
+#     	while (<$sock>) {
+#     	    if ($sign > 0) {
+		
+#     	    last if /^END/;
+#     	    $found = 1 if /^VALUE (\S+) (\d+) (\d+)/;
+#     	}
+#     	print "searching2:$res\n";
+#     }
+#     return $res;
+# }
+
+if ($com eq 'flush_all') {
+    print $sock $com;
+    print "Complete!: (Command)$com\n";
+    exit;
+}
+elsif ($com eq 'set') {
+    my $key;
+#   my $keynum = &find_largest_key;
+    my $value = "a" x $byte;
+    for my $n (1..$items) {
+	$counter++;
+#	$key = ($key_prefix).($keynum);
+	$key = ($key_prefix).($counter);
+	print $sock "$com $key 0 0 $byte\r\n$value\r\n";
+	#print "$com $key 0 0 $byte\r\n$value\r\n";
+	while (<$sock>) {
+	    last if (/^STORED/);
+#	    die "$_" unless (/^STORED/);
+	}
+#	$keynum++;
+    }
+    print "Complete!: (Command)$com (Byte)$byte (Items)$items (SendTo)$addr\n";
+    exit;
+}
+elsif ($com eq 'del') {
+    my @keys;
+    print $sock "stats cachedump $classid $items\r\n";
+    my $i = 0;
+    while (<$sock>) {
+	last if /^END/;
+	if (/^ITEM (\S+)/) {
+	    $keys[$i] = $1;
+	}
+	$i++;
+    }
+
+    foreach my $key (@keys) {
+	print $sock "delete $key\r\n";
+	while (<$sock>) {
+	    last if /^DELETED/;
+	}
+    }
+    print "Complete!: (Command)$com (ClassID)$classid (Items)$items\n";
+    exit;
+}
+
+
+__END__
