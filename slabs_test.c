@@ -1,5 +1,11 @@
 #include <stdio.h>
 #include <time.h>
+
+#ifndef bool
+#define bool int 
+#endif
+
+#include "memcached.h"
 #include "slabs.h"
 
 #define TESTTIME 10000
@@ -10,7 +16,8 @@ int main(int argc, char *argv[]) {
   int exectime;
   
   time(&start_time);
-  for (int i=0; i < TESTTIME; i++) {
+  int i;
+  for (i=0; i < TESTTIME; i++) {
     spare_larger_clsid(&clsid);
   }
   time(&end_time);
