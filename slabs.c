@@ -21,6 +21,23 @@
 #include <assert.h>
 #include <pthread.h>
 
+/* Umemcache added 2012_10_23 */
+#include <sys/time.h>
+
+struct timeval sparelarger_start, sparelarger_end, slabs_start, slabs_end;
+double sparelarger_time, slabs_time;
+#define UMEMCACHE_SPARELARGER_START() gettimeofday(&sparelarger_start)
+#define UMEMCACHE_SPARELARGER_END() gettimeofday(&sparelarger_end); \
+    sparelarger_time += (sparelarger_end.tv_sec - sparelarger_start.tv_sec) + \
+        ((sparelarger_end.tv_usec - sparelarger_start.tv_usec)*1.0E-6)
+#define UMEMCACHE_SPARELARGER_GETTIME(time) (*time = sparelarger_time)
+
+#define UMEMCACHE_SLABS_START() gettimeofday(&slabs_start)
+#define UMEMCACHE_SLABS_END() gettimeofday(&slabs_end); \
+    slabs_time += (slabs_end.tv_sec - slabs_start.tv_sec) + \
+        ((slabs_end.tv_usec - slabs_start.tv_usec)*1.0E-6)
+#define UMEMCACHE_SLABS_GETTIME(time) (*time = slabs_time)
+
 /* powers-of-N allocation structures */
 
 typedef struct {
@@ -92,16 +109,20 @@ unsigned int slabs_clsid(const size_t size) {
  * Required slabs_lock
  */
 unsigned int spare_larger_clsid(unsigned int *id) {
-    unsigned int res = *id;
 
-    if (id == 0) return 0;    
+    
+    UMEMCACHE_SPARELARGER_START();
+
+    if (id == 0 || *id == power_largest) return 0;    
+    unsigned int res = *id;
 
     while (slabclass[res].sl_curr == 0) {
         if (res++ == power_largest) return 0;
     }
-
+    assert(res > 0 && res < power_largest);
     *id = res;
-    
+
+    UMEMCACHE_SPARELARGER_END();
     return 1;
 }
 
@@ -242,6 +263,8 @@ static void *do_slabs_alloc(const size_t size, unsigned int *id) {
     void *ret = NULL;
     item *it = NULL;
 
+    UMEMCACHE_SLABS_START();
+
     if (*id < POWER_SMALLEST || *id > power_largest) {
         MEMCACHED_SLABS_ALLOCATE_FAILED(size, 0);
         return NULL;
@@ -280,6 +303,8 @@ static void *do_slabs_alloc(const size_t size, unsigned int *id) {
     } else {
         MEMCACHED_SLABS_ALLOCATE_FAILED(size, *id);
     }
+
+    UMEMCACHE_SLABS_END();
 
     return ret;
 }

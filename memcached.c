@@ -47,6 +47,10 @@
 #include <sysexits.h>
 #include <stddef.h>
 
+#ifndef ENABLE_DTRACE
+#define ENABLE_DTRACE
+#endif
+
 /* FreeBSD 4.x doesn't have IOV_MAX exposed. */
 #ifndef IOV_MAX
 #if defined(__FreeBSD__) || defined(__APPLE__)
@@ -3019,7 +3023,8 @@ static void process_arithmetic_command(conn *c, token_t *tokens, const size_t nt
         out_string(c, temp);
         break;
     case NON_NUMERIC:
-        out_string(c, "CLIENT_ERROR cannot increment or decrement non-numeric value");
+        out_string(c, "CLIENT_ERROR cannot increment or decrement non-numeric value"
+
         break;
     case EOM:
         out_string(c, "SERVER_ERROR out of memory");
@@ -3257,7 +3262,7 @@ static void process_command(conn *c, char *command) {
                 (strcmp(tokens[COMMAND_TOKEN].value, "prepend") == 0 && (comm = NREAD_PREPEND)) ||
                 (strcmp(tokens[COMMAND_TOKEN].value, "append") == 0 && (comm = NREAD_APPEND)) )) {
 
-        process_update_command(c, tokens, ntokens, comm, false);
+         process_update_command(c, tokens, ntokens, comm, false);
 
     } else if ((ntokens == 7 || ntokens == 8) && (strcmp(tokens[COMMAND_TOKEN].value, "cas") == 0 && (comm = NREAD_CAS))) {
 

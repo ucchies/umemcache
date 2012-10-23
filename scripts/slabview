@@ -6,7 +6,7 @@ use Term::Screen;
 
 #print "Hello Perl!\n";
 
-my $addr = "localhost:11211";
+my $addr = shift | "172.28.32.131:11211";
 print "Address: $addr\n";
 my $sock = IO::Socket::INET->new(PeerAddr => $addr,
 				Proto    => 'tcp');
