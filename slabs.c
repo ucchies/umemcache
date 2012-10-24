@@ -26,17 +26,11 @@
 
 struct timeval sparelarger_start, sparelarger_end, slabs_start, slabs_end;
 double sparelarger_time, slabs_time;
-#define UMEMCACHE_SPARELARGER_START() gettimeofday(&sparelarger_start)
-#define UMEMCACHE_SPARELARGER_END() gettimeofday(&sparelarger_end); \
-    sparelarger_time += (sparelarger_end.tv_sec - sparelarger_start.tv_sec) + \
-        ((sparelarger_end.tv_usec - sparelarger_start.tv_usec)*1.0E-6)
+#define UMEMCACHE_SPARELARGER_START(start_time) gettimeofday(start_time)
+#define UMEMCACHE_SPARELARGER_END(end_time) gettimeofday(end_time); \
+    sparelarger_time += (end_time.tv_sec - start_time.tv_sec) +             \
+        ((end_time.tv_usec - start_time.tv_usec)*1.0E-6)
 #define UMEMCACHE_SPARELARGER_GETTIME(time) (*time = sparelarger_time)
-
-#define UMEMCACHE_SLABS_START() gettimeofday(&slabs_start)
-#define UMEMCACHE_SLABS_END() gettimeofday(&slabs_end); \
-    slabs_time += (slabs_end.tv_sec - slabs_start.tv_sec) + \
-        ((slabs_end.tv_usec - slabs_start.tv_usec)*1.0E-6)
-#define UMEMCACHE_SLABS_GETTIME(time) (*time = slabs_time)
 
 /* powers-of-N allocation structures */
 
@@ -111,7 +105,7 @@ unsigned int slabs_clsid(const size_t size) {
 unsigned int spare_larger_clsid(unsigned int *id) {
 
     
-    UMEMCACHE_SPARELARGER_START();
+    UMEMCACHE_SPARELARGER_START(&sparelarger_start);
 
     if (id == 0 || *id == power_largest) return 0;    
     unsigned int res = *id;
@@ -122,7 +116,7 @@ unsigned int spare_larger_clsid(unsigned int *id) {
     assert(res > 0 && res < power_largest);
     *id = res;
 
-    UMEMCACHE_SPARELARGER_END();
+    UMEMCACHE_SPARELARGER_END(&sparelarger_end);
     return 1;
 }
 
@@ -263,7 +257,7 @@ static void *do_slabs_alloc(const size_t size, unsigned int *id) {
     void *ret = NULL;
     item *it = NULL;
 
-    UMEMCACHE_SLABS_START();
+    UMEMCACHE_SLABS_START(&slabs_start);
 
     if (*id < POWER_SMALLEST || *id > power_largest) {
         MEMCACHED_SLABS_ALLOCATE_FAILED(size, 0);
@@ -304,7 +298,7 @@ static void *do_slabs_alloc(const size_t size, unsigned int *id) {
         MEMCACHED_SLABS_ALLOCATE_FAILED(size, *id);
     }
 
-    UMEMCACHE_SLABS_END();
+    UMEMCACHE_SLABS_END(&slabs_end);
 
     return ret;
 }
