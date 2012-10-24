@@ -47,9 +47,9 @@
 #include <sysexits.h>
 #include <stddef.h>
 
-#ifndef ENABLE_DTRACE
-#define ENABLE_DTRACE
-#endif
+/* #ifndef ENABLE_DTRACE */
+/* #define ENABLE_DTRACE */
+/* #endif */
 
 /* FreeBSD 4.x doesn't have IOV_MAX exposed. */
 #ifndef IOV_MAX
