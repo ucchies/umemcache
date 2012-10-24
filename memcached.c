@@ -3023,8 +3023,7 @@ static void process_arithmetic_command(conn *c, token_t *tokens, const size_t nt
         out_string(c, temp);
         break;
     case NON_NUMERIC:
-        out_string(c, "CLIENT_ERROR cannot increment or decrement non-numeric value"
-
+        out_string(c, "CLIENT_ERROR cannot increment or decrement non-numeric value");
         break;
     case EOM:
         out_string(c, "SERVER_ERROR out of memory");
