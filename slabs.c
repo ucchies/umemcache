@@ -26,11 +26,11 @@
 
 struct timeval sparelarger_start, sparelarger_end, slabs_start, slabs_end;
 double sparelarger_time, slabs_time;
-#define UMEMCACHE_TIMER_START(start_time) gettimeofday(start_time,NULL)
-#define UMEMCACHE_TIMER_END(end_time) gettimeofday(end_time,NULL);          \
-    sparelarger_time += (end_time.tv_sec - start_time.tv_sec) +             \
-        ((end_time.tv_usec - start_time.tv_usec)*1.0E-6)
-#define UMEMCACHE_TIMER_GETTIME(time) (*time = sparelarger_time)
+#define UMEMCACHE_TIMER_START(start_time) gettimeofday((start_time),NULL)
+#define UMEMCACHE_TIMER_END(end_time,start_time) gettimeofday((end_time),NULL);   \
+    sparelarger_time += (*(end_time).tv_sec - *(start_time).tv_sec) +     \
+        ((*(end_time).tv_usec - *(start_time).tv_usec)*1.0E-6)
+#define UMEMCACHE_TIMER_GETTIME(time) (*(time) = sparelarger_time)
 
 /* powers-of-N allocation structures */
 
@@ -116,7 +116,7 @@ unsigned int spare_larger_clsid(unsigned int *id) {
     assert(res > 0 && res < power_largest);
     *id = res;
 
-    UMEMCACHE_TIMER_END(&sparelarger_end);
+    UMEMCACHE_TIMER_END(&sparelarger_end,&sparelarger_start);
     return 1;
 }
 
@@ -298,7 +298,7 @@ static void *do_slabs_alloc(const size_t size, unsigned int *id) {
         MEMCACHED_SLABS_ALLOCATE_FAILED(size, *id);
     }
 
-    UMEMCACHE_TIMER_END(&slabs_end);
+    UMEMCACHE_TIMER_END(&slabs_end,&slabs_start);
 
     return ret;
 }
