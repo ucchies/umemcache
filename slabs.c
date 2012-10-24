@@ -26,8 +26,8 @@
 
 struct timeval sparelarger_start, sparelarger_end, slabs_start, slabs_end;
 double sparelarger_time, slabs_time;
-#define UMEMCACHE_TIMER_START(start_time) gettimeofday(start_time)
-#define UMEMCACHE_TIMER_END(end_time) gettimeofday(end_time); \
+#define UMEMCACHE_TIMER_START(start_time) gettimeofday(start_time,NULL)
+#define UMEMCACHE_TIMER_END(end_time) gettimeofday(end_time,NULL);          \
     sparelarger_time += (end_time.tv_sec - start_time.tv_sec) +             \
         ((end_time.tv_usec - start_time.tv_usec)*1.0E-6)
 #define UMEMCACHE_TIMER_GETTIME(time) (*time = sparelarger_time)
