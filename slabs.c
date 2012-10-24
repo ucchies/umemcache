@@ -353,6 +353,13 @@ bool get_stats(const char *stat_type, int nkey, ADD_STAT add_stats, void *c) {
             slabs_stats(add_stats, c);
         } else if (nz_strcmp(nkey, stat_type, "sizes") == 0) {
             item_stats_sizes(add_stats, c);
+        }
+        /* Umemcache added 2012_10_24 */
+        else if (nz_strcmp(nkey, stat_type, "time") == 0) {
+            STATS_LOCK();
+            APPEND_STAT("Slabs Time", "%lf", sparelarger_time);
+            APPEND_STAT("Additional", "%lf", slabs_time);
+            STATS_UNLOCK();
         } else {
             ret = false;
         }
