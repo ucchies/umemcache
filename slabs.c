@@ -22,14 +22,15 @@
 #include <pthread.h>
 
 /* Umemcache added 2012_10_23 */
-#include <sys/time.h>
+//#include <sys/time.h>
+#include <time.h>
 
-struct timeval sparelarger_start, sparelarger_end, slabs_start, slabs_end;
+struct timespec sparelarger_start, sparelarger_end, slabs_start, slabs_end;
 double sparelarger_time, slabs_time;
-#define UMEMCACHE_TIMER_START(start_time) gettimeofday((start_time),NULL)
-#define UMEMCACHE_TIMER_END(end_time,start_time) gettimeofday((end_time),NULL);   \
+#define UMEMCACHE_TIMER_START(start_time) clock_gettime(CLOCK_PROCESS_CPUTIME_ID, (start_time))
+#define UMEMCACHE_TIMER_END(end_time,start_time) clock_gettime(CLOCK_PROCESS_CPUTIME_ID, (end_time)); \
     sparelarger_time += ((end_time)->tv_sec - (start_time)->tv_sec) +     \
-        (((end_time)->tv_usec - (start_time)->tv_usec)*1.0E-6)
+        (((end_time)->tv_nsec - (start_time)->tv_nsec)*1.0E-9)
 #define UMEMCACHE_TIMER_GETTIME(time) (*(time) = sparelarger_time)
 
 /* powers-of-N allocation structures */
