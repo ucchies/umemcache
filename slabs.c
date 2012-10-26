@@ -22,8 +22,8 @@
 #include <pthread.h>
 
 /* Umemcache added 2012_10_23 */
-//#include <sys/time.h>
-#include <time.h>
+#include <sys/time.h>
+//#include <time.h>
 
 struct timespec sparelarger_start, sparelarger_end, slabs_start, slabs_end;
 struct timespec sparelarger_time, slabs_time;
@@ -360,8 +360,8 @@ bool get_stats(const char *stat_type, int nkey, ADD_STAT add_stats, void *c) {
             STATS_LOCK();
             char slabs_time_result[40] = "";
             char sparelarger_time_result[40] = "";
-            sprintf(slabs_time_result, "%ldu.%ldu", slabs_time.tv_sec, slabs_time.tv_nsec);
-            sprintf(sparelarger_time_result, "%ldu.%ldu", sparelarger_time.tv_sec, sparelarger_time.tv_nsec);
+            sprintf(slabs_time_result, "%ld.%ld", slabs_time.tv_sec, slabs_time.tv_nsec);
+            sprintf(sparelarger_time_result, "%ld.%ld", sparelarger_time.tv_sec, sparelarger_time.tv_nsec);
             APPEND_STAT("Slabs Time", "%s", slabs_time_result);
             APPEND_STAT("Additional", "%s", sparelarger_time_result);
             STATS_UNLOCK();
