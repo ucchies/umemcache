@@ -26,12 +26,12 @@
 #include <time.h>
 
 struct timespec sparelarger_start, sparelarger_end, slabs_start, slabs_end;
-double sparelarger_time, slabs_time;
+struct timespec sparelarger_time, slabs_time;
 #define UMEMCACHE_TIMER_START(start_time) clock_gettime(CLOCK_PROCESS_CPUTIME_ID, (start_time))
-#define UMEMCACHE_TIMER_END(end_time,start_time) clock_gettime(CLOCK_PROCESS_CPUTIME_ID, (end_time)); \
-    sparelarger_time += ((end_time)->tv_sec - (start_time)->tv_sec) +     \
-        (((end_time)->tv_nsec - (start_time)->tv_nsec)*1.0E-9)
-#define UMEMCACHE_TIMER_GETTIME(time) (*(time) = sparelarger_time)
+#define UMEMCACHE_TIMER_END(end_time,start_time,result) clock_gettime(CLOCK_PROCESS_CPUTIME_ID, (end_time)); \
+    (result)->tv_sec += ((end_time)->tv_sec - (start_time)->tv_sec);    \
+        (result)->tv_nsec += ((end_time)->tv_sec - (start_time)->tv_nsec)
+//#define UMEMCACHE_TIMER_GETTIME(time) (*(time) = sparelarger_time)
 
 /* powers-of-N allocation structures */
 
@@ -117,7 +117,7 @@ unsigned int spare_larger_clsid(unsigned int *id) {
     assert(res > 0 && res < power_largest);
     *id = res;
 
-    UMEMCACHE_TIMER_END(&sparelarger_end,&sparelarger_start);
+    UMEMCACHE_TIMER_END(&sparelarger_end,&sparelarger_start,&sparelarger_time);
     return 1;
 }
 
@@ -299,7 +299,7 @@ static void *do_slabs_alloc(const size_t size, unsigned int *id) {
         MEMCACHED_SLABS_ALLOCATE_FAILED(size, *id);
     }
 
-    UMEMCACHE_TIMER_END(&slabs_end,&slabs_start);
+    UMEMCACHE_TIMER_END(&slabs_end,&slabs_start,&slabs_time);
 
     return ret;
 }
@@ -358,8 +358,12 @@ bool get_stats(const char *stat_type, int nkey, ADD_STAT add_stats, void *c) {
         /* Umemcache added 2012_10_24 */
         else if (nz_strcmp(nkey, stat_type, "time") == 0) {
             STATS_LOCK();
-            APPEND_STAT("Slabs Time", "%lf", sparelarger_time);
-            APPEND_STAT("Additional", "%lf", slabs_time);
+            char slabs_time_result[40] = "";
+            char sparelarger_time_result[40] = "";
+            sprintf(slabs_time_result, "%ld.%ld", slabs_time.tv_sec, slabs_time.tv_nsec);
+            sprintf(sparelarger_time_result, "%ld.%ld", sparelarger_time.tv_sec, sparelarger_time.tv_nsec);
+            APPEND_STAT("Slabs Time", "%s", slabs_time_result);
+            APPEND_STAT("Additional", "%s", sparelarger_time_result);
             STATS_UNLOCK();
         } else {
             ret = false;
