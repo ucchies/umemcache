@@ -3,7 +3,7 @@
 COMMENT = $1
 
 git add .
-git commit -m 'modify $COMMENT'
+git commit -m "modify $COMMENT"
 git push origin master << EOF
 ucchies
 gitx7950
