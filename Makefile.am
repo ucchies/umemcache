@@ -79,6 +79,12 @@ test:	memcached-debug sizes testapp
 	prove $(srcdir)/t
 	@if test `basename $(PROFILER)` = "gcov"; then \
 	  for file in memcached_debug-*.gc??; do \
+
+
+
+
+
+
 	    mv -f $$file `echo $$file | sed 's/memcached_debug-//'`; \
 	  done && \
 	  for file in *.gcda; do \

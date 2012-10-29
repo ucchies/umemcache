@@ -26,11 +26,11 @@
 //#include <time.h>
 
 struct timespec sparelarger_start, sparelarger_end, slabs_start, slabs_end;
-struct timespec sparelarger_time, slabs_time;
+double sparelarger_time, slabs_time;
 #define UMEMCACHE_TIMER_START(start_time) clock_gettime(CLOCK_PROCESS_CPUTIME_ID, (start_time))
 #define UMEMCACHE_TIMER_END(end_time,start_time,result) clock_gettime(CLOCK_PROCESS_CPUTIME_ID, (end_time)); \
-    (result)->tv_sec += ((end_time)->tv_sec - (start_time)->tv_sec);    \
-        (result)->tv_nsec += ((end_time)->tv_sec - (start_time)->tv_nsec)
+    (*result) += ((end_time)->tv_sec - (start_time)->tv_sec) +           \
+        (((end_time)->tv_nsec - (start_time)->tv_nsec)*1.0E-9)
 //#define UMEMCACHE_TIMER_GETTIME(time) (*(time) = sparelarger_time)
 
 /* powers-of-N allocation structures */
