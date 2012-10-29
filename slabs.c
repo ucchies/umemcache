@@ -106,7 +106,7 @@ unsigned int slabs_clsid(const size_t size) {
 unsigned int spare_larger_clsid(unsigned int *id) {
 
     
-    UMEMCACHE_TIMER_START(&sparelarger_start);
+    //UMEMCACHE_TIMER_START(&sparelarger_start);
 
     if (id == 0 || *id == power_largest) return 0;    
     unsigned int res = *id;
@@ -117,7 +117,7 @@ unsigned int spare_larger_clsid(unsigned int *id) {
     assert(res > 0 && res < power_largest);
     *id = res;
 
-    UMEMCACHE_TIMER_END(&sparelarger_end,&sparelarger_start,&sparelarger_time);
+    //UMEMCACHE_TIMER_END(&sparelarger_end,&sparelarger_start,&sparelarger_time);
     return 1;
 }
 
