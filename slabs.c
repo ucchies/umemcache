@@ -106,7 +106,7 @@ unsigned int slabs_clsid(const size_t size) {
 unsigned int spare_larger_clsid(unsigned int *id) {
 
     
-    //UMEMCACHE_TIMER_START(&sparelarger_start);
+    UMEMCACHE_TIMER_START(&sparelarger_start);
 
     if (id == 0 || *id == power_largest) return 0;    
     unsigned int res = *id;
@@ -117,7 +117,7 @@ unsigned int spare_larger_clsid(unsigned int *id) {
     assert(res > 0 && res < power_largest);
     *id = res;
 
-    //UMEMCACHE_TIMER_END(&sparelarger_end,&sparelarger_start,&sparelarger_time);
+    UMEMCACHE_TIMER_END(&sparelarger_end,&sparelarger_start,&sparelarger_time);
     return 1;
 }
 
@@ -385,7 +385,7 @@ static void do_slabs_stats(ADD_STAT add_stats, void *c) {
     total = 0;
     for(i = POWER_SMALLEST; i <= power_largest; i++) {
         slabclass_t *p = &slabclass[i];
-        if (p->slabs != 0 || settings.verbose > 1) {
+        if (p->slabs != 0) {
             uint32_t perslab, slabs;
             slabs = p->slabs;
             perslab = p->perslab;
