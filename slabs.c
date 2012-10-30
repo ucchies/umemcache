@@ -385,7 +385,7 @@ static void do_slabs_stats(ADD_STAT add_stats, void *c) {
     total = 0;
     for(i = POWER_SMALLEST; i <= power_largest; i++) {
         slabclass_t *p = &slabclass[i];
-        if (p->slabs != 0) {
+        if (p->slabs != 0 || settings.verbose > 1) {
             uint32_t perslab, slabs;
             slabs = p->slabs;
             perslab = p->perslab;
