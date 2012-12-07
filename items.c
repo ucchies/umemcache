@@ -58,7 +58,7 @@ uint64_t get_cas_id(void) {
 #if 0
 # define DEBUG_REFCNT(it,op)                            \
     fprintf(stderr, "item %x refcnt(%c) %d %c%c%c\n",   \
-            it, op, it->refcount,                       \
+            it, op, it->refcount,         \
             (it->it_flags & ITEM_LINKED) ? 'L' : ' ',   \
             (it->it_flags & ITEM_SLABBED) ? 'S' : ' ')
 #else
@@ -122,7 +122,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_tim
             do_item_unlink_nolock(it, hash(ITEM_key(it), it->nkey, 0));
             /* Initialize the item block: */
             it->slabs_clsid = 0;
-        } else if ((it = slabs_alloc(ntotal, &id)) == NULL) {
+        } else if ((it = slabs_alloc(ntotal, &id)) == NULL || (it = do_extra_item_alloc(ntotal, &id) == NULL)) {
             if (settings.evict_to_free == 0) {
                 itemstats[id].outofmemory++;
                 mutex_unlock(&cache_lock);
@@ -162,6 +162,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_tim
     } else {
         /* If the LRU is empty or locked, attempt to allocate memory */
         it = slabs_alloc(ntotal, &id);
+        if (it == NULL) it = do_extra_item_alloc(ntotal, id);
         if (search != NULL)
             refcount_decr(&search->refcount);
     }
@@ -197,7 +198,10 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_tim
     it->slabs_clsid = id;
 
     DEBUG_REFCNT(it, '*');
-    it->it_flags = settings.use_cas ? ITEM_CAS : 0;
+    if (!(it->it_flags & ITEM_CHILD))
+        it->it_flags = settings.use_cas ? ITEM_CAS : 0;
+    else
+        it->it_flags = settings.use_cas ? (ITEM_CAS | ITEM_CHILD) : ITEM_CHILD;
     it->nkey = nkey;
     it->nbytes = nbytes;
     memcpy(ITEM_key(it), key, nkey);
@@ -205,6 +209,55 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_tim
     memcpy(ITEM_suffix(it), suffix, (size_t)nsuffix);
     it->nsuffix = nsuffix;
     return it;
+}
+
+/* Umemcache added 2012_11_30 */
+/**
+ * @param often-used class item
+ * Return an extra-item
+ * Require cache_lock
+ */
+item *do_extra_item_alloc(const size_t ntotal, unsigned int *clsid) {
+    unsigned int new_clsid;
+    item *ret;
+
+    if ((new_clsid = slabs_idle_clsid(*clsid)) == 0)
+        return NULL;
+    else if (slabs_size(new_clsid) < sizeof(item) + (sizeof(child_prefix) + slabs_size(*clsid)) * 2) {
+        if ((it = slabs_alloc(ntotal, &new_clsid)) == NULL) return NULL;
+    } else {
+        uint8_t parent_nkey = 0;
+        int parent_flags = ITEM_PARENT;
+        int parent_nbytes = slabs_size(new_clsid) - sizeof(item) - parent_nkey - 40;
+        char parent_suffix[40];
+        uint8_t parent_nsuffix;
+        item *parent = NULL;
+        size_t ntotal;
+        
+        ntotal = item_make_header(parent_nkey, parent_flags, parent_nbytes, parent_suffix, &parent_nsuffix);
+        if ((parent = slabs_alloc(ntotal, &new_clsid)) == NULL) return NULL;
+        assert(parent->slabs_clsid == 0);
+        assert(parent != heads[new_clsid]);
+
+        parent->refcount = 1;
+        parent->next = parent->prev = parent->h_next = 0;
+        parent->slabs_clsid = new_clsid;
+        DEBUG_REFCNT(parent, '*');
+        parent->it_flags = settings.use_cas ? (parent_flags | ITEM_CAS) : parent_flags;
+        parent->nkey = parent_nkey;
+        parent->nbytes = parent_nbytes;
+        memcpy(ITEM_key(it), "", parent_nkey);
+        parent->exptime = 0;
+        memcpy(ITEM_suffix(it), parent_suffix, (size_t)parent_nsuffix);
+        parent->nsuffix = parent_nsuffix;
+        item_link_q(parent);
+        
+        split_parent_into_freelist((char *)parent, *clsid);
+        ret = slabs_alloc(ntotal, clsid);
+        ret->it_flags = ret->it_flags | ITEM_CHILD;
+    }
+    
+    return ret;
 }
 
 void item_free(item *it) {
@@ -220,6 +273,23 @@ void item_free(item *it) {
     it->slabs_clsid = 0;
     DEBUG_REFCNT(it, 'F');
     slabs_free(it, ntotal, clsid);
+}
+
+bool parent_empty_nester(item *parent) {
+    char *ptr = ITEM_data(parent);
+    child_prefix *prefix = (child_prefix *)ptr;
+    item *child;
+
+    while (prefix != NULL && prefix->parent == parent) {
+        ptr += sizeof(child_prefix);
+        child = (item *)ptr;
+        assert((child->it_flags & ITEM_CHILD) != 0);
+        if (child->prev != NULL || child->next != NULL)
+            return false;
+        ptr += ITEM_ntotal(child);
+        prefix = (child_prefix *)ptr;
+    }
+    return true;
 }
 
 /**
@@ -314,7 +384,13 @@ void do_item_unlink(item *it, const uint32_t hv) {
         STATS_UNLOCK();
         assoc_delete(ITEM_key(it), it->nkey, hv);
         item_unlink_q(it);
-        do_item_remove(it);
+        if ((it->it_flags & ITEM_CHILD) == 0) {
+            do_item_remove(it);
+        } else {
+            item *parent = ((child_prefix *)ITEM_child_prefix(it))->parent;
+            if(parent_empty_nester(parent))
+                item_unlink_q(parent);
+        }
     }
     mutex_unlock(&cache_lock);
 }
@@ -338,7 +414,7 @@ void do_item_remove(item *it) {
     MEMCACHED_ITEM_REMOVE(ITEM_key(it), it->nkey, it->nbytes);
     assert((it->it_flags & ITEM_SLABBED) == 0);
 
-    if (refcount_decr(&it->refcount) == 0) {
+    if (refcount_decr(&it->refcount) == 0 && it->it_flags) {
         item_free(it);
     }
 }

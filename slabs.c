@@ -22,16 +22,22 @@
 #include <pthread.h>
 
 /* Umemcache added 2012_10_23 */
+#if 1
+#define UMEMCACHE_DEBUG
 #include <sys/time.h>
-//#include <time.h>
 
 struct timespec sparelarger_start, sparelarger_end, slabs_start, slabs_end;
 double sparelarger_time, slabs_time;
+int sparelarger_count = 0;
+
 #define UMEMCACHE_TIMER_START(start_time) clock_gettime(CLOCK_PROCESS_CPUTIME_ID, (start_time))
 #define UMEMCACHE_TIMER_END(end_time,start_time,result) clock_gettime(CLOCK_PROCESS_CPUTIME_ID, (end_time)); \
     (*result) += ((end_time)->tv_sec - (start_time)->tv_sec) +           \
         (((end_time)->tv_nsec - (start_time)->tv_nsec)*1.0E-9)
 //#define UMEMCACHE_TIMER_GETTIME(time) (*(time) = sparelarger_time)
+#define UMEMCACHE_SPARELARGER_COUNT() sparelarger_count++;
+
+#endif /* UMEMCACHE_DEBUG */
 
 /* powers-of-N allocation structures */
 
@@ -55,7 +61,6 @@ static slabclass_t slabclass[MAX_NUMBER_OF_SLAB_CLASSES];
 static size_t mem_limit = 0;
 static size_t mem_malloced = 0;
 static int power_largest;
-
 static void *mem_base = NULL;
 static void *mem_current = NULL;
 static size_t mem_avail = 0;
@@ -72,6 +77,10 @@ static pthread_mutex_t slabs_rebalance_lock = PTHREAD_MUTEX_INITIALIZER;
 static int do_slabs_newslab(const unsigned int id);
 static void *memory_allocate(size_t size);
 static void do_slabs_free(void *ptr, const size_t size, unsigned int id);
+
+/* Umemcache added function 2012_12_04 */
+unsigned int spare_larger_clsid(unsigned int *id);
+static void split_parent_into_freelist(char *ptr, const unsigned int child_id);
 
 /* Preallocate as many slab pages as possible (called from slabs_init)
    on start-up, so users don't get confused out-of-memory errors when
@@ -100,13 +109,55 @@ unsigned int slabs_clsid(const size_t size) {
     return res;
 }
 
+
+/*Umemcache added 2012_12_04 */
+unsigned int slabs_idle_clsid(const unsigned int min_id) {
+    unsigned int res = 0;
+    int freelist_cnt = 0;
+
+    if (res < 1) return 0;
+    int i;
+    for (i = min_id + 1; i < power_largest; i++) {
+        if (freelist_cnt < slabclass[i].sl_curr) {
+            freelist_cnt = slabclass[i].sl_curr;
+            res = i;
+        }
+    }
+    return res;
+}
+
+/*Umemcache added 2012_12_05 */
+unsigned int slabs_freq_used_clsid(const size_t max_size) {
+    unsigned int res = 0;
+    size_t size = 0;
+
+    if (max_size <= 0) return 0;
+
+    int i;
+    for (i = POWER_SMALLEST; slabclass[i].size <= max_size; i++) {
+        if (size < slabclass[i].requested) {
+            size = slabclass[i].requested;
+            res = i;
+        }
+    }
+    return res;
+}
+
+
+/* Umemcache added 2012_12_04 */
+size_t slabs_size(const unsigned int clsid) {
+    return slabclass[clsid].size;
+}
+
 /* 
  * Required slabs_lock
  */
 unsigned int spare_larger_clsid(unsigned int *id) {
 
-    
+#ifdef UMEMCACHE_DEBUG
+    UMEMCACHE_SPARELARGER_COUNT();
     UMEMCACHE_TIMER_START(&sparelarger_start);
+#endif
 
     if (id == 0 || *id == power_largest) return 0;    
     unsigned int res = *id;
@@ -117,7 +168,10 @@ unsigned int spare_larger_clsid(unsigned int *id) {
     assert(res > 0 && res < power_largest);
     *id = res;
 
+#ifdef UMEMCACHE_DEBUG
     UMEMCACHE_TIMER_END(&sparelarger_end,&sparelarger_start,&sparelarger_time);
+#endif
+
     return 1;
 }
 
@@ -225,6 +279,33 @@ static void split_slab_page_into_freelist(char *ptr, const unsigned int id) {
     }
 }
 
+/* Umemcache added 2012_11_30 */
+/**
+ * @param a parent item
+ * @param classid of child items
+ */
+static void split_parent_into_freelist(char *ptr, unsigned int child_id) {
+    slabclass_t *p = &slabclass[child_id];
+    item *parent = (item *)ptr;
+    size_t parent_ntotal = ITEM_ntotal(parent);
+    child_prefix *prefix;    
+    size_t used = 0;
+
+    ptr = ITEM_data(parent);
+    do {
+        prefix = (child_prefix *)ptr;
+        prefix->parent = parent;
+        ptr += sizeof(child_prefix);
+        child_id = slabs_freq_used_clsid(slabs_clsid(parent->nbytes - len));
+        do_slabs_free(ptr, 0, child_id);
+        ptr += p->size;
+        used += sizeof(child_prefix) + p->size;
+        
+        child_id = slabs_freq_used_clsid(parent->nbytes - used);
+        p = &slabclass[child_id];
+    } while (child_id != 0 && (parent->nbytes - used > sizeof(child_prefix) + p->size));
+}
+
 static int do_slabs_newslab(const unsigned int id) {
     slabclass_t *p = &slabclass[id];
     int len = settings.slab_reassign ? settings.item_size_max
@@ -258,7 +339,9 @@ static void *do_slabs_alloc(const size_t size, unsigned int *id) {
     void *ret = NULL;
     item *it = NULL;
 
+#ifdef UMEMCACHE_DEBUG
     UMEMCACHE_TIMER_START(&slabs_start);
+#endif
 
     if (*id < POWER_SMALLEST || *id > power_largest) {
         MEMCACHED_SLABS_ALLOCATE_FAILED(size, 0);
@@ -299,7 +382,9 @@ static void *do_slabs_alloc(const size_t size, unsigned int *id) {
         MEMCACHED_SLABS_ALLOCATE_FAILED(size, *id);
     }
 
+#ifdef UMEMCACHE_DEBUG
     UMEMCACHE_TIMER_END(&slabs_end,&slabs_start,&slabs_time);
+#endif
 
     return ret;
 }
@@ -356,6 +441,7 @@ bool get_stats(const char *stat_type, int nkey, ADD_STAT add_stats, void *c) {
             item_stats_sizes(add_stats, c);
         }
         /* Umemcache added 2012_10_24 */
+#ifdef UMEMCACHE_DEBUG
         else if (nz_strcmp(nkey, stat_type, "time") == 0) {
             STATS_LOCK();
             char slabs_time_result[40] = "";
@@ -363,9 +449,12 @@ bool get_stats(const char *stat_type, int nkey, ADD_STAT add_stats, void *c) {
             sprintf(slabs_time_result, "%.10f", slabs_time);
             sprintf(sparelarger_time_result, "%.10f", sparelarger_time);
             APPEND_STAT("Slabs Time", "%s", slabs_time_result);
-            APPEND_STAT("Additional", "%s", sparelarger_time_result);
+            APPEND_STAT("SpareLarger Time", "%s", sparelarger_time_result);
+            APPEND_STAT("SpareLarger Count", "%d", sparelarger_count);
             STATS_UNLOCK();
-        } else {
+        }
+#endif
+        else {
             ret = false;
         }
     } else {
