@@ -21,23 +21,25 @@
 #include <assert.h>
 #include <pthread.h>
 
-/* Umemcache added 2012_10_23 */
-#if 1
-#define UMEMCACHE_DEBUG
-#include <sys/time.h>
+/* Umemcache added 2012_10_23 
+ * 2012_12_07: moved to items.c
+ */
+/* #if 1 */
+/* #define UMEMCACHE_DEBUG */
+/* #include <sys/time.h> */
 
-struct timespec sparelarger_start, sparelarger_end, slabs_start, slabs_end;
-double sparelarger_time, slabs_time;
-int sparelarger_count = 0;
+/* struct timespec sparelarger_start, sparelarger_end, slabs_start, slabs_end; */
+/* double sparelarger_time, slabs_time; */
+/* int sparelarger_count = 0; */
 
-#define UMEMCACHE_TIMER_START(start_time) clock_gettime(CLOCK_PROCESS_CPUTIME_ID, (start_time))
-#define UMEMCACHE_TIMER_END(end_time,start_time,result) clock_gettime(CLOCK_PROCESS_CPUTIME_ID, (end_time)); \
-    (*result) += ((end_time)->tv_sec - (start_time)->tv_sec) +           \
-        (((end_time)->tv_nsec - (start_time)->tv_nsec)*1.0E-9)
-//#define UMEMCACHE_TIMER_GETTIME(time) (*(time) = sparelarger_time)
-#define UMEMCACHE_SPARELARGER_COUNT() sparelarger_count++;
+/* #define UMEMCACHE_TIMER_START(start_time) clock_gettime(CLOCK_PROCESS_CPUTIME_ID, (start_time)) */
+/* #define UMEMCACHE_TIMER_END(end_time,start_time,result) clock_gettime(CLOCK_PROCESS_CPUTIME_ID, (end_time)); \ */
+/*     (*result) += ((end_time)->tv_sec - (start_time)->tv_sec) +           \ */
+/*         (((end_time)->tv_nsec - (start_time)->tv_nsec)*1.0E-9) */
+/* //#define UMEMCACHE_TIMER_GETTIME(time) (*(time) = sparelarger_time) */
+/* #define UMEMCACHE_SPARELARGER_COUNT() sparelarger_count++; */
 
-#endif /* UMEMCACHE_DEBUG */
+/* #endif /\* UMEMCACHE_DEBUG *\/ */
 
 /* powers-of-N allocation structures */
 
@@ -78,10 +80,6 @@ static int do_slabs_newslab(const unsigned int id);
 static void *memory_allocate(size_t size);
 static void do_slabs_free(void *ptr, const size_t size, unsigned int id);
 
-/* Umemcache added function 2012_12_04 */
-unsigned int spare_larger_clsid(unsigned int *id);
-static void split_parent_into_freelist(char *ptr, const unsigned int child_id);
-
 /* Preallocate as many slab pages as possible (called from slabs_init)
    on start-up, so users don't get confused out-of-memory errors when
    they do have free (in-slab) space, but no space to make new slabs.
@@ -111,11 +109,14 @@ unsigned int slabs_clsid(const size_t size) {
 
 
 /*Umemcache added 2012_12_04 */
+/**
+ *  @param often-used class id
+ */
 unsigned int slabs_idle_clsid(const unsigned int min_id) {
     unsigned int res = 0;
     int freelist_cnt = 0;
 
-    if (res < 1) return 0;
+    if (min_id < POWER_SMALLEST) return 0;
     int i;
     for (i = min_id + 1; i < power_largest; i++) {
         if (freelist_cnt < slabclass[i].sl_curr) {
@@ -131,7 +132,7 @@ unsigned int slabs_freq_used_clsid(const size_t max_size) {
     unsigned int res = 0;
     size_t size = 0;
 
-    if (max_size <= 0) return 0;
+    if (max_size < slabclass[POWER_SMALLEST].size) return 0;
 
     int i;
     for (i = POWER_SMALLEST; slabclass[i].size <= max_size; i++) {
@@ -151,29 +152,30 @@ size_t slabs_size(const unsigned int clsid) {
 
 /* 
  * Required slabs_lock
+ * 2012_12_07 : revocation
  */
-unsigned int spare_larger_clsid(unsigned int *id) {
+/* unsigned int spare_larger_clsid(unsigned int *id) { */
 
-#ifdef UMEMCACHE_DEBUG
-    UMEMCACHE_SPARELARGER_COUNT();
-    UMEMCACHE_TIMER_START(&sparelarger_start);
-#endif
+/* #ifdef UMEMCACHE_DEBUG */
+/*     UMEMCACHE_SPARELARGER_COUNT(); */
+/*     UMEMCACHE_TIMER_START(&sparelarger_start); */
+/* #endif */
 
-    if (id == 0 || *id == power_largest) return 0;    
-    unsigned int res = *id;
+/*     if (id == 0 || *id == power_largest) return 0;     */
+/*     unsigned int res = *id; */
 
-    while (slabclass[res].sl_curr == 0) {
-        if (res++ == power_largest) return 0;
-    }
-    assert(res > 0 && res < power_largest);
-    *id = res;
+/*     while (slabclass[res].sl_curr == 0) { */
+/*         if (res++ == power_largest) return 0; */
+/*     } */
+/*     assert(res > 0 && res < power_largest); */
+/*     *id = res; */
 
-#ifdef UMEMCACHE_DEBUG
-    UMEMCACHE_TIMER_END(&sparelarger_end,&sparelarger_start,&sparelarger_time);
-#endif
+/* #ifdef UMEMCACHE_DEBUG */
+/*     UMEMCACHE_TIMER_END(&sparelarger_end,&sparelarger_start,&sparelarger_time); */
+/* #endif */
 
-    return 1;
-}
+/*     return 1; */
+/* } */
 
 /**
  * Determines the chunk sizes and initializes the slab class descriptors
@@ -284,26 +286,26 @@ static void split_slab_page_into_freelist(char *ptr, const unsigned int id) {
  * @param a parent item
  * @param classid of child items
  */
-static void split_parent_into_freelist(char *ptr, unsigned int child_id) {
+void split_parent_into_freelist(char *ptr, unsigned int child_id) {
     slabclass_t *p = &slabclass[child_id];
     item *parent = (item *)ptr;
-    size_t parent_ntotal = ITEM_ntotal(parent);
-    child_prefix *prefix;    
+    /* size_t parent_ntotal = ITEM_ntotal(parent); */
+    child_prefix *prefix = NULL;    
     size_t used = 0;
 
     ptr = ITEM_data(parent);
+    memset(ptr, 0, parent->nbytes);
     do {
         prefix = (child_prefix *)ptr;
         prefix->parent = parent;
         ptr += sizeof(child_prefix);
-        child_id = slabs_freq_used_clsid(slabs_clsid(parent->nbytes - len));
         do_slabs_free(ptr, 0, child_id);
         ptr += p->size;
         used += sizeof(child_prefix) + p->size;
-        
-        child_id = slabs_freq_used_clsid(parent->nbytes - used);
+        child_id = slabs_freq_used_clsid((used < parent->nbytes) ? (parent->nbytes - used) : 0);
         p = &slabclass[child_id];
-    } while (child_id != 0 && (parent->nbytes - used > sizeof(child_prefix) + p->size));
+    } while (child_id != 0 && (used + sizeof(child_prefix) + p->size + 2) < parent->nbytes);
+    memcpy(ITEM_data(parent) + parent->nbytes - 2, "\r\n", 2);
 }
 
 static int do_slabs_newslab(const unsigned int id) {
@@ -332,34 +334,35 @@ static int do_slabs_newslab(const unsigned int id) {
    
 /*
     2012_08_28 : use spare_larger_clsid
+    2012_12_07 : cancel spare_larger_clsid
  */
 /*@null@*/
-static void *do_slabs_alloc(const size_t size, unsigned int *id) {
+static void *do_slabs_alloc(const size_t size, unsigned int id) {
     slabclass_t *p;
     void *ret = NULL;
     item *it = NULL;
 
-#ifdef UMEMCACHE_DEBUG
-    UMEMCACHE_TIMER_START(&slabs_start);
-#endif
+/* #ifdef UMEMCACHE_DEBUG */
+/*     UMEMCACHE_TIMER_START(&slabs_start); */
+/* #endif */
 
-    if (*id < POWER_SMALLEST || *id > power_largest) {
+    if (id < POWER_SMALLEST || id > power_largest) {
         MEMCACHED_SLABS_ALLOCATE_FAILED(size, 0);
         return NULL;
     }
 
-    p = &slabclass[*id];
+    p = &slabclass[id];
     assert(p->sl_curr == 0 || ((item *)p->slots)->slabs_clsid == 0);
 
     /* fail unless we have space at the end of a recently allocated page,
        we have something on our freelist, or we could allocate a new page */    
-    if (! (p->sl_curr != 0 || do_slabs_newslab(*id) != 0 || spare_larger_clsid(id) != 0)) {
+    if (! (p->sl_curr != 0 || do_slabs_newslab(id) != 0)) {
         /* We don't have more memory available */
         ret = NULL;
     } else if (p->sl_curr == 0) {
         //unsigned int new_id = spare_larger_clsid(id);
-        assert(*id != 0);
-        p = &slabclass[*id];
+        assert(id != 0);
+        p = &slabclass[id];
         it = (item *)p->slots;
         p->slots = it->next;
         if (it->next) it->next->prev = 0;
@@ -377,14 +380,14 @@ static void *do_slabs_alloc(const size_t size, unsigned int *id) {
 
     if (ret) {
         p->requested += size;
-        MEMCACHED_SLABS_ALLOCATE(size, *id, p->size, ret);
+        MEMCACHED_SLABS_ALLOCATE(size, id, p->size, ret);
     } else {
-        MEMCACHED_SLABS_ALLOCATE_FAILED(size, *id);
+        MEMCACHED_SLABS_ALLOCATE_FAILED(size, id);
     }
 
-#ifdef UMEMCACHE_DEBUG
-    UMEMCACHE_TIMER_END(&slabs_end,&slabs_start,&slabs_time);
-#endif
+/* #ifdef UMEMCACHE_DEBUG */
+/*     UMEMCACHE_TIMER_END(&slabs_end,&slabs_start,&slabs_time); */
+/* #endif */
 
     return ret;
 }
@@ -444,13 +447,14 @@ bool get_stats(const char *stat_type, int nkey, ADD_STAT add_stats, void *c) {
 #ifdef UMEMCACHE_DEBUG
         else if (nz_strcmp(nkey, stat_type, "time") == 0) {
             STATS_LOCK();
-            char slabs_time_result[40] = "";
-            char sparelarger_time_result[40] = "";
-            sprintf(slabs_time_result, "%.10f", slabs_time);
-            sprintf(sparelarger_time_result, "%.10f", sparelarger_time);
-            APPEND_STAT("Slabs Time", "%s", slabs_time_result);
-            APPEND_STAT("SpareLarger Time", "%s", sparelarger_time_result);
-            APPEND_STAT("SpareLarger Count", "%d", sparelarger_count);
+            char alloc_time_result[40] = "";
+            char extra_time_result[40] = "";
+            sprintf(alloc_time_result, "%.10f", alloc_time);
+            sprintf(extra_time_result, "%.10f", extra_time);
+            APPEND_STAT("Slabs Time", "%s", alloc_time_result);
+            APPEND_STAT("Extra Time", "%s", extra_time_result);
+            APPEND_STAT("Extra Count", "%d", extra_count);
+            UMEMCACHE_TIMER_RESET();
             STATS_UNLOCK();
         }
 #endif
@@ -550,7 +554,7 @@ static void *memory_allocate(size_t size) {
     return ret;
 }
 
-void *slabs_alloc(size_t size, unsigned int *id) {
+void *slabs_alloc(size_t size, unsigned int id) {
     void *ret;
 
     pthread_mutex_lock(&slabs_lock);

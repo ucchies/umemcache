@@ -13,6 +13,12 @@
 #include <time.h>
 #include <assert.h>
 
+#ifdef UMEMCACHE_DEBUG
+struct timespec extra_start, extra_end, alloc_start, alloc_end;
+double extra_time, alloc_time;
+int extra_count = 0;
+#endif
+
 /* Forward Declarations */
 static void item_link_q(item *it);
 static void item_unlink_q(item *it);
@@ -34,6 +40,10 @@ typedef struct {
     uint64_t tailrepairs;
     uint64_t expired_unfetched;
     uint64_t evicted_unfetched;
+    /* Umemcache added 2012_12_10 */
+    uint64_t sparelargered;
+    uint64_t multiblocked;
+    uint64_t extraalloc_failed;
 } itemstats_t;
 
 static item *heads[LARGEST_ID];
@@ -86,6 +96,11 @@ static size_t item_make_header(const uint8_t nkey, const int flags, const int nb
 
 /*@null@*/
 item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_time_t exptime, const int nbytes) {
+
+#ifdef UMEMCACHE_DEBUG
+    UMEMCACHE_TIMER_START(&alloc_start);
+#endif
+
     uint8_t nsuffix;
     item *it = NULL;
     char suffix[40];
@@ -122,7 +137,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_tim
             do_item_unlink_nolock(it, hash(ITEM_key(it), it->nkey, 0));
             /* Initialize the item block: */
             it->slabs_clsid = 0;
-        } else if ((it = slabs_alloc(ntotal, &id)) == NULL || (it = do_extra_item_alloc(ntotal, &id) == NULL)) {
+        } else if ((it = slabs_alloc(ntotal, id)) == NULL && (it = do_extra_item_alloc(ntotal, &id)) == NULL) {
             if (settings.evict_to_free == 0) {
                 itemstats[id].outofmemory++;
                 mutex_unlock(&cache_lock);
@@ -161,8 +176,8 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_tim
         }
     } else {
         /* If the LRU is empty or locked, attempt to allocate memory */
-        it = slabs_alloc(ntotal, &id);
-        if (it == NULL) it = do_extra_item_alloc(ntotal, id);
+        it = slabs_alloc(ntotal, id);
+        if (it == NULL) it = do_extra_item_alloc(ntotal, &id);
         if (search != NULL)
             refcount_decr(&search->refcount);
     }
@@ -208,6 +223,11 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_tim
     it->exptime = exptime;
     memcpy(ITEM_suffix(it), suffix, (size_t)nsuffix);
     it->nsuffix = nsuffix;
+
+#ifdef UMEMCACHE_DEBUG
+    UMEMCACHE_TIMER_END(&alloc_end, &alloc_start, &alloc_time);
+#endif
+
     return it;
 }
 
@@ -218,15 +238,40 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_tim
  * Require cache_lock
  */
 item *do_extra_item_alloc(const size_t ntotal, unsigned int *clsid) {
-    unsigned int new_clsid;
-    item *ret;
 
-    if ((new_clsid = slabs_idle_clsid(*clsid)) == 0)
+#ifdef UMEMCACHE_DEBUG
+    UMEMCACHE_EXTRA_COUNT();
+    UMEMCACHE_TIMER_START(&extra_start);
+#endif
+
+    unsigned int new_clsid;
+    item *ret = NULL;
+
+    if ((new_clsid = slabs_idle_clsid(*clsid)) == 0) {
+        itemstats[*clsid].extraalloc_failed++;
         return NULL;
+    }
+#if !defined(UMEMCACHE_DEBUG) || UMEMCACHE_DEBUG_SPARELARGER && UMEMCACHE_DEBUG_MULTIBLOCK
     else if (slabs_size(new_clsid) < sizeof(item) + (sizeof(child_prefix) + slabs_size(*clsid)) * 2) {
-        if ((it = slabs_alloc(ntotal, &new_clsid)) == NULL) return NULL;
-    } else {
-        uint8_t parent_nkey = 0;
+        ret = slabs_alloc(ntotal, new_clsid);
+        assert(ret != NULL);
+        itemstats[*clsid].sparelargered++;
+        *clsid = new_clsid;
+    } 
+#endif /* UEMCACHE_DEBUG_SPARELARGER */
+
+#if defined(UMEMCACHE_DEBUG) && UMEMCACHE_DEBUG_SPARELARGER && !UMEMCACHE_DEBUG_MULTIBLOCK
+    else {
+        ret = slabs_alloc(ntotal, new_clsid);
+        assert(ret != NULL);
+        itemstats[*clsid].sparelargered++;
+        *clsid = new_clsid;
+    } 
+#endif /* SPARELARGER && !MULTIBLOCK */
+
+#if !defined(UMEMCACHE_DEBUG) || UMEMCACHE_DEBUG_MULTIBLOCK
+    else {
+        uint8_t parent_nkey = 1;
         int parent_flags = ITEM_PARENT;
         int parent_nbytes = slabs_size(new_clsid) - sizeof(item) - parent_nkey - 40;
         char parent_suffix[40];
@@ -235,7 +280,8 @@ item *do_extra_item_alloc(const size_t ntotal, unsigned int *clsid) {
         size_t ntotal;
         
         ntotal = item_make_header(parent_nkey, parent_flags, parent_nbytes, parent_suffix, &parent_nsuffix);
-        if ((parent = slabs_alloc(ntotal, &new_clsid)) == NULL) return NULL;
+        parent = slabs_alloc(ntotal, new_clsid);
+        assert(parent != NULL);
         assert(parent->slabs_clsid == 0);
         assert(parent != heads[new_clsid]);
 
@@ -246,17 +292,24 @@ item *do_extra_item_alloc(const size_t ntotal, unsigned int *clsid) {
         parent->it_flags = settings.use_cas ? (parent_flags | ITEM_CAS) : parent_flags;
         parent->nkey = parent_nkey;
         parent->nbytes = parent_nbytes;
-        memcpy(ITEM_key(it), "", parent_nkey);
+        memcpy(ITEM_key(parent), "", parent_nkey);
         parent->exptime = 0;
-        memcpy(ITEM_suffix(it), parent_suffix, (size_t)parent_nsuffix);
+        memcpy(ITEM_suffix(parent), parent_suffix, (size_t)parent_nsuffix);
         parent->nsuffix = parent_nsuffix;
         item_link_q(parent);
         
         split_parent_into_freelist((char *)parent, *clsid);
-        ret = slabs_alloc(ntotal, clsid);
+        ret = slabs_alloc(ntotal, *clsid);
+        assert(ret != NULL);
         ret->it_flags = ret->it_flags | ITEM_CHILD;
+        itemstats[*clsid].multiblocked++;
     }
-    
+#endif /* UMEMCACHE_DEBUG_MULTIBLOCK */    
+
+#ifdef UMEMCACHE_DEBUG
+    UMEMCACHE_TIMER_END(&extra_end, &extra_start, &extra_time);
+#endif
+
     return ret;
 }
 
@@ -406,7 +459,13 @@ void do_item_unlink_nolock(item *it, const uint32_t hv) {
         STATS_UNLOCK();
         assoc_delete(ITEM_key(it), it->nkey, hv);
         item_unlink_q(it);
-        do_item_remove(it);
+        if ((it->it_flags & ITEM_CHILD) == 0) {
+            do_item_remove(it);
+        } else {
+            item *parent = ((child_prefix *)ITEM_child_prefix(it))->parent;
+            if(parent_empty_nester(parent))
+                item_unlink_q(parent);
+        }
     }
 }
 
@@ -522,6 +581,13 @@ void do_item_stats(ADD_STAT add_stats, void *c) {
                                 "%llu", (unsigned long long)itemstats[i].expired_unfetched);
             APPEND_NUM_FMT_STAT(fmt, i, "evicted_unfetched",
                                 "%llu", (unsigned long long)itemstats[i].evicted_unfetched);
+            /* Umemcache added 2012_12_10 */
+            APPEND_NUM_FMT_STAT(fmt, i, "sparelargered",
+                                "%llu", (unsigned long long)itemstats[i].sparelargered);
+            APPEND_NUM_FMT_STAT(fmt, i, "multiblocked",
+                                "%llu", (unsigned long long)itemstats[i].multiblocked);
+            APPEND_NUM_FMT_STAT(fmt, i, "extraalloc_failed",
+                                "%llu", (unsigned long long)itemstats[i].extraalloc_failed);
         }
     }
 
