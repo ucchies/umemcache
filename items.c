@@ -292,7 +292,7 @@ item *do_extra_item_alloc(const size_t ntotal, unsigned int *clsid) {
         parent->it_flags = settings.use_cas ? (parent_flags | ITEM_CAS) : parent_flags;
         parent->nkey = parent_nkey;
         parent->nbytes = parent_nbytes;
-        memcpy(ITEM_key(parent), "", parent_nkey);
+        memcpy(ITEM_key(parent), "P", parent_nkey);
         parent->exptime = 0;
         memcpy(ITEM_suffix(parent), parent_suffix, (size_t)parent_nsuffix);
         parent->nsuffix = parent_nsuffix;

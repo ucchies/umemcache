@@ -18,11 +18,18 @@ void slabs_init(const size_t limit, const double factor, const bool prealloc);
 
 unsigned int slabs_clsid(const size_t size);
 
-/* Given spare id */
-unsigned int spare_larger_clsid(unsigned int *id);
+/* Umemcache added function 2012_12_04 */
+/* unsigned int spare_larger_clsid(unsigned int *id); */
+/*
+ * 2012_12_07 : moved from slabs.c
+ */
+void split_parent_into_freelist(char *ptr, const unsigned int child_id);
+unsigned int slabs_idle_clsid(const unsigned int min_id);
+unsigned int slabs_freq_used_clsid(const size_t max_size);
+size_t slabs_size(const unsigned int clsid);
 
 /** Allocate object of given length. 0 on error */ /*@null@*/
-void *slabs_alloc(const size_t size, unsigned int *id);
+void *slabs_alloc(const size_t size, unsigned int id);
 
 /** Free previously allocated object */
 void slabs_free(void *ptr, size_t size, unsigned int id);

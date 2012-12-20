@@ -25,3 +25,31 @@ item *do_item_touch(const char *key, const size_t nkey, uint32_t exptime, const 
 void item_stats_reset(void);
 extern pthread_mutex_t cache_lock;
 void item_stats_evictions(uint64_t *evicted);
+
+/* Umemcache added 2012_12_07 */
+item *do_extra_item_alloc(const size_t ntotal, unsigned int *clsid);
+bool parent_empty_nester(item *parent);
+
+/* Umemcache added 2012_12_07
+ * 2012_12_07: moved from slabs.c AND modified
+ */
+#ifndef UMEMCACHE_DEBUG
+#define UMEMCACHE_DEBUG
+#include <sys/time.h>
+
+extern struct timespec extra_start, extra_end, alloc_start, alloc_end;
+extern double extra_time, alloc_time;
+extern int extra_count;
+
+#define UMEMCACHE_TIMER_START(start_time) clock_gettime(CLOCK_PROCESS_CPUTIME_ID, (start_time))
+#define UMEMCACHE_TIMER_END(end_time,start_time,result) clock_gettime(CLOCK_PROCESS_CPUTIME_ID, (end_time)); \
+    (*result) += ((end_time)->tv_sec - (start_time)->tv_sec) +           \
+        (((end_time)->tv_nsec - (start_time)->tv_nsec)*1.0E-9)
+//#define UMEMCACHE_TIMER_GETTIME() extra_time;
+#define UMEMCACHE_TIMER_RESET() extra_time = alloc_time = 0
+#define UMEMCACHE_EXTRA_COUNT() extra_count++;
+
+#define UMEMCACHE_DEBUG_SPARELARGER 0
+#define UMEMCACHE_DEBUG_MULTIBLOCK 1
+
+#endif /* UMEMCACHE_DEBUG */

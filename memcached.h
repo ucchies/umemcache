@@ -102,6 +102,12 @@
          + (item)->nsuffix + (item)->nbytes \
          + (((item)->it_flags & ITEM_CAS) ? sizeof(uint64_t) : 0))
 
+/* Umemcache added 2012_11_28 
+ * Require checking (item->it_flag & ITEM_CHILD)
+ */
+#define ITEM_child_prefix(item) (((char *)(item)) \
+         - (((item)->it_flags & ITEM_CHILD) ? sizeof(struct _child_prefix) : 0))
+
 #define STAT_KEY_LEN 128
 #define STAT_VAL_LEN 128
 
@@ -316,6 +322,10 @@ extern struct settings settings;
 
 #define ITEM_FETCHED 8
 
+/* Umemcache added 2012_11_28 */
+#define ITEM_PARENT 16
+#define ITEM_CHILD 32
+
 /**
  * Structure for storing items within memcached.
  */
@@ -342,6 +352,11 @@ typedef struct _stritem {
     /* then " flags length\r\n" (no terminating null) */
     /* then data with terminating \r\n (no terminating null; it's binary!) */
 } item;
+
+/* Umemcache added 2012_11_28 */
+typedef struct _child_prefix {
+    struct _stritem *parent;
+} child_prefix;
 
 typedef struct {
     pthread_t thread_id;        /* unique ID of this thread */
