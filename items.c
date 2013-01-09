@@ -51,6 +51,10 @@ static item *tails[LARGEST_ID];
 static itemstats_t itemstats[LARGEST_ID];
 static unsigned int sizes[LARGEST_ID];
 
+/* /\* Umemcache added 2012_12_31 *\/ */
+/* static item *parent_heads[LARGEST_ID]; */
+/* static item *parent_tails[LARGEST_ID]; */
+
 void item_stats_reset(void) {
     mutex_lock(&cache_lock);
     memset(itemstats, 0, sizeof(itemstats));
@@ -74,6 +78,71 @@ uint64_t get_cas_id(void) {
 #else
 # define DEBUG_REFCNT(it,op) while(0)
 #endif
+
+#ifdef UMEMCACHE_DEBUG
+
+static void items_check(void) {
+    mutex_lock(&cache_lock);
+    item **head;
+    item **tail;
+    //unsigned int *size;
+    /* Item list check */
+    int i;
+    for (i = POWER_SMALLEST; i <= LARGEST_ID - POWER_SMALLEST + 1; i++) {
+        head = &heads[i];
+        tail = &tails[i];
+        //size = &sizes[i];
+        item *it = NULL;
+        item *next = NULL;
+        item *prev = NULL;
+        unsigned int counter = 0;
+        for (it = *head; it != NULL; it = next) {
+            if (counter == 0) 
+                assert(it->prev == NULL);
+            assert((it->it_flags & ITEM_LINKED) != 0);
+            next = it->next;
+            counter++;
+        }
+        //assert(counter == *size);
+        counter = 0;
+        for (it = *tail; it != NULL; it = prev) {
+            if (counter == 0)
+                assert(it->next == NULL);
+            prev = it->prev;
+            counter++;
+        }
+        //assert(counter == *size);
+    }
+    mutex_unlock(&cache_lock);
+}
+
+static bool item_search(item *arg) {
+    mutex_lock(&cache_lock);
+    item **head;
+    item **tail;
+    //unsigned int *size;
+    /* Item list check */
+    int i;
+    bool ret = false;
+    for (i = POWER_SMALLEST; i <= LARGEST_ID - POWER_SMALLEST + 1; i++) {
+        head = &heads[i];
+        tail = &tails[i];
+        item *it = NULL;
+        item *next = NULL;
+        for (it = *head; it != NULL; it = next) {
+            if (it == arg) {
+                assert(ret == true);
+                ret = true;
+            }
+            next = it->next;
+        }
+        assert(it == *tail);
+    }
+    mutex_unlock(&cache_lock);
+    return false;
+}
+
+#endif /* UMEMCACHE_DEBUG */
 
 /**
  * Generates the variable-sized part of the header for an object.
@@ -213,7 +282,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_tim
     it->slabs_clsid = id;
 
     DEBUG_REFCNT(it, '*');
-    if (!(it->it_flags & ITEM_CHILD))
+    if ((it->it_flags & ITEM_CHILD) == 0)
         it->it_flags = settings.use_cas ? ITEM_CAS : 0;
     else
         it->it_flags = settings.use_cas ? (ITEM_CAS | ITEM_CHILD) : ITEM_CHILD;
@@ -226,6 +295,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_tim
 
 #ifdef UMEMCACHE_DEBUG
     UMEMCACHE_TIMER_END(&alloc_end, &alloc_start, &alloc_time);
+    items_check();
 #endif
 
     return it;
@@ -246,44 +316,58 @@ item *do_extra_item_alloc(const size_t ntotal, unsigned int *clsid) {
 
     unsigned int new_clsid;
     item *ret = NULL;
-
-    if ((new_clsid = slabs_idle_clsid(*clsid)) == 0) {
+    
+    new_clsid = slabs_idle_clsid(*clsid);
+    if (new_clsid == 0) {
         itemstats[*clsid].extraalloc_failed++;
         return NULL;
     }
-#if !defined(UMEMCACHE_DEBUG) || UMEMCACHE_DEBUG_SPARELARGER && UMEMCACHE_DEBUG_MULTIBLOCK
-    else if (slabs_size(new_clsid) < sizeof(item) + (sizeof(child_prefix) + slabs_size(*clsid)) * 2) {
-        ret = slabs_alloc(ntotal, new_clsid);
-        assert(ret != NULL);
-        itemstats[*clsid].sparelargered++;
-        *clsid = new_clsid;
-    } 
-#endif /* UEMCACHE_DEBUG_SPARELARGER */
-
-#if defined(UMEMCACHE_DEBUG) && UMEMCACHE_DEBUG_SPARELARGER && !UMEMCACHE_DEBUG_MULTIBLOCK
-    else {
-        ret = slabs_alloc(ntotal, new_clsid);
-        assert(ret != NULL);
-        itemstats[*clsid].sparelargered++;
-        *clsid = new_clsid;
-    } 
-#endif /* SPARELARGER && !MULTIBLOCK */
 
 #if !defined(UMEMCACHE_DEBUG) || UMEMCACHE_DEBUG_MULTIBLOCK
-    else {
-        uint8_t parent_nkey = 1;
-        int parent_flags = ITEM_PARENT;
-        int parent_nbytes = slabs_size(new_clsid) - sizeof(item) - parent_nkey - 40;
-        char parent_suffix[40];
-        uint8_t parent_nsuffix;
-        item *parent = NULL;
-        size_t ntotal;
+    uint8_t parent_nkey = 1;
+    int parent_flags = ITEM_PARENT;
+    int parent_nbytes;
+    char parent_suffix[10] = "/r/n";
+    uint8_t parent_nsuffix = 2;
+    item *parent = NULL;
+    size_t parent_ntotal;
         
-        ntotal = item_make_header(parent_nkey, parent_flags, parent_nbytes, parent_suffix, &parent_nsuffix);
-        parent = slabs_alloc(ntotal, new_clsid);
+    /* uint8_t parent_nsuffix_tmp = -1; */
+    /* while (parent_nsuffix_tmp != parent_nsuffix) { */
+    /*     parent_nsuffix_tmp = parent_nsuffix; */
+    /*     parent_ntotal = item_make_header(parent_nkey, parent_flags, parent_nbytes, parent_suffix, &parent_nsuffix); */
+    /*     parent_nbytes = slabs_size(new_clsid) - sizeof(item) - (settings.use_cas ? sizeof(uint64_t) : 0) - parent_nkey - parent_nsuffix; */
+    /* } */
+    
+    parent_ntotal = slabs_size(new_clsid);
+    parent_nbytes = parent_ntotal - sizeof(item) - (settings.use_cas ? sizeof(uint64_t) : 0) - parent_nkey - parent_nsuffix;
+
+#endif /* UMEMCACHE_DEBUG_MULTIBLOCK */
+
+    ret = slabs_alloc(ntotal, new_clsid);
+
+#if !defined(UMEMCACHE_DEBUG) || UMEMCACHE_DEBUG_MULTIBLOCK
+    if (parent_nbytes < ntotal + sizeof(child_prefix) || (ret->it_flags & ITEM_CHILD) != 0)
+#endif
+    {
+#if !defined(UMEMCACHE_DEBUG) || UMEMCACHE_DEBUG_SPARELARGER
+        assert(ret != NULL);
+        itemstats[*clsid].sparelargered++;
+        *clsid = new_clsid;
+#else
+        slabs_free(ret, ntotal, new_clsid);
+        ret = NULL;
+#endif /* UMEMCACHE_DEBUG_SPARELARGER */
+    }
+#if !defined(UMEMCACHE_DEBUG) || UMEMCACHE_DEBUG_MULTIBLOCK
+    else 
+    {
+        slabs_adjust_mem_requested(new_clsid, ntotal, parent_ntotal);
+        parent = ret;
         assert(parent != NULL);
         assert(parent->slabs_clsid == 0);
         assert(parent != heads[new_clsid]);
+        assert(parent != tails[new_clsid]);
 
         parent->refcount = 1;
         parent->next = parent->prev = parent->h_next = 0;
@@ -296,15 +380,15 @@ item *do_extra_item_alloc(const size_t ntotal, unsigned int *clsid) {
         parent->exptime = 0;
         memcpy(ITEM_suffix(parent), parent_suffix, (size_t)parent_nsuffix);
         parent->nsuffix = parent_nsuffix;
-        item_link_q(parent);
+        /* item_link_q(parent); */
         
         split_parent_into_freelist((char *)parent, *clsid);
         ret = slabs_alloc(ntotal, *clsid);
-        assert(ret != NULL);
-        ret->it_flags = ret->it_flags | ITEM_CHILD;
+        assert(ret != NULL && ret != parent);
+        assert((ret->it_flags & ITEM_CHILD) != 0);
         itemstats[*clsid].multiblocked++;
     }
-#endif /* UMEMCACHE_DEBUG_MULTIBLOCK */    
+#endif /* UMEMCACHE_DEBUG_MULTIBLOCK */
 
 #ifdef UMEMCACHE_DEBUG
     UMEMCACHE_TIMER_END(&extra_end, &extra_start, &extra_time);
@@ -312,6 +396,7 @@ item *do_extra_item_alloc(const size_t ntotal, unsigned int *clsid) {
 
     return ret;
 }
+
 
 void item_free(item *it) {
     size_t ntotal = ITEM_ntotal(it);
@@ -332,17 +417,23 @@ bool parent_empty_nester(item *parent) {
     char *ptr = ITEM_data(parent);
     child_prefix *prefix = (child_prefix *)ptr;
     item *child;
+    bool ret = true;
 
-    while (prefix != NULL && prefix->parent == parent) {
+    assert(parent != NULL);
+
+    while (strncmp((char *)prefix, "", 1)) {
+        assert(prefix->parent == parent);
         ptr += sizeof(child_prefix);
         child = (item *)ptr;
         assert((child->it_flags & ITEM_CHILD) != 0);
-        if (child->prev != NULL || child->next != NULL)
-            return false;
+        assert((child->it_flags & ITEM_SLABBED) == 0);
+        assert(!item_search(child));
+        if ((child->it_flags & ITEM_LINKED) != 0)
+            ret = false;
         ptr += ITEM_ntotal(child);
         prefix = (child_prefix *)ptr;
     }
-    return true;
+    return ret;
 }
 
 /**
@@ -441,8 +532,11 @@ void do_item_unlink(item *it, const uint32_t hv) {
             do_item_remove(it);
         } else {
             item *parent = ((child_prefix *)ITEM_child_prefix(it))->parent;
-            if(parent_empty_nester(parent))
-                item_unlink_q(parent);
+            /* if(parent_empty_nester(parent)) */
+            /*     do_item_remove(parent); */
+            assert(parent->refcount > 1);
+            if ((refcount_decr(&parent->refcount) == 1) && (parent_empty_nester(parent)))
+                do_item_remove(parent);
         }
     }
     mutex_unlock(&cache_lock);
@@ -463,8 +557,11 @@ void do_item_unlink_nolock(item *it, const uint32_t hv) {
             do_item_remove(it);
         } else {
             item *parent = ((child_prefix *)ITEM_child_prefix(it))->parent;
-            if(parent_empty_nester(parent))
-                item_unlink_q(parent);
+            /* if(parent_empty_nester(parent)) */
+            /*     do_item_remove(parent); */
+            assert(parent->refcount > 1);
+            if ((refcount_decr(&parent->refcount) == 1) && (parent_empty_nester(parent)))
+                do_item_remove(parent);
         }
     }
 }

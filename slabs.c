@@ -56,7 +56,7 @@ typedef struct {
     unsigned int list_size; /* size of prev array */
 
     unsigned int killing;  /* index+1 of dying slab, or zero if none */
-    size_t requested; /* The number of requested bytes */
+    int requested; /* The number of requested bytes */
 } slabclass_t;
 
 static slabclass_t slabclass[MAX_NUMBER_OF_SLAB_CLASSES];
@@ -149,6 +149,91 @@ unsigned int slabs_freq_used_clsid(const size_t max_size) {
 size_t slabs_size(const unsigned int clsid) {
     return slabclass[clsid].size;
 }
+
+/* Umemcache added 2013_01_05 */
+#ifdef UMEMCACHE_DEBUG
+static void slabs_check(void) {
+    mutex_lock(&slabs_lock);
+    slabclass_t *p;
+    /* Free list check */
+    int i;
+    for (i = POWER_SMALLEST; i <= power_largest - POWER_SMALLEST + 1; i++) {
+        p = &slabclass[i];
+        item *it = NULL;
+        item *next = NULL;
+        item *prev = NULL;
+        item *tail = NULL;
+        item *head = NULL;
+        unsigned int counter = 0;
+        for (it = (item *)p->slots; it != NULL; it = next) {
+            if (counter == 0) 
+                assert(it->prev == NULL);
+            assert((it->it_flags & ITEM_SLABBED) != 0);
+            next = it->next;
+            if (it->next == NULL)
+                tail = it;
+            counter++;
+        }
+        assert(counter == p->sl_curr);
+        counter = 0;
+        for (it = tail; it != NULL; it = prev) {
+            if (counter == 0)
+                assert(it->next == NULL);
+            prev = it->prev;
+            if (it->prev == NULL)
+                head = it;
+            counter++;
+        }
+        assert(counter == p->sl_curr);
+        assert(head == (item *)p->slots);
+    }
+    mutex_unlock(&slabs_lock);
+}
+
+/* Umemcache added 2013_01_07 */
+/**
+ *  @param pointer(an item, child_prefix etc)
+ *  return pointer existing in freelist
+ */
+/* static void slabs_check_with_ptr(char *ptr) { */
+/*     mutex_lock(&slabs_lock); */
+/*     slabclass_t *p; */
+/*     /\* Free list check *\/ */
+/*     int i; */
+/*     for (i = POWER_SMALLEST; i <= power_largest - POWER_SMALLEST + 1; i++) { */
+/*         p = &slabclass[i]; */
+/*         item *it = NULL; */
+/*         item *next = NULL; */
+/*         item *prev = NULL; */
+/*         item *tail = NULL; */
+/*         item *head = NULL; */
+/*         for (it = (item *)p->slots; it != NULL; it = next) { */
+/*             if (counter == 0)  */
+/*                 assert(it->prev == NULL); */
+/*             assert((it->it_flags & ITEM_SLABBED) != 0); */
+/*             next = it->next; */
+/*             if (it->next == NULL) */
+/*                 tail = it; */
+/*             counter++; */
+/*         } */
+/*         assert(counter == p->sl_curr); */
+/*         counter = 0; */
+/*         for (it = tail; it != NULL; it = prev) { */
+/*             if (counter == 0) */
+/*                 assert(it->next == NULL); */
+/*             prev = it->prev; */
+/*             if (it->prev == NULL) */
+/*                 head = it; */
+/*             counter++; */
+/*         } */
+/*         assert(counter == p->sl_curr); */
+/*         assert(head == (item *)p->slots); */
+/*     } */
+/*     mutex_unlock(&slabs_lock); */
+/* } */
+
+#endif /* UMEMCACHE_DEBUG */
+
 
 /* 
  * Required slabs_lock
@@ -289,23 +374,34 @@ static void split_slab_page_into_freelist(char *ptr, const unsigned int id) {
 void split_parent_into_freelist(char *ptr, unsigned int child_id) {
     slabclass_t *p = &slabclass[child_id];
     item *parent = (item *)ptr;
+    item *child = NULL;
     /* size_t parent_ntotal = ITEM_ntotal(parent); */
     child_prefix *prefix = NULL;    
     size_t used = 0;
 
+    assert(parent->nbytes <= slabclass[parent->slabs_clsid].size);
+    assert(parent->nbytes >= slabclass[child_id].size);
     ptr = ITEM_data(parent);
     memset(ptr, 0, parent->nbytes);
+
     do {
         prefix = (child_prefix *)ptr;
         prefix->parent = parent;
         ptr += sizeof(child_prefix);
-        do_slabs_free(ptr, 0, child_id);
+        child = (item *)ptr;
+        slabs_free(child, 0, child_id);
+        child->it_flags |= ITEM_CHILD;
         ptr += p->size;
-        used += sizeof(child_prefix) + p->size;
+        used = used + sizeof(child_prefix) + p->size;
+        assert(used < parent->nbytes);
+        parent->refcount++;
         child_id = slabs_freq_used_clsid((used < parent->nbytes) ? (parent->nbytes - used) : 0);
         p = &slabclass[child_id];
-    } while (child_id != 0 && (used + sizeof(child_prefix) + p->size + 2) < parent->nbytes);
-    memcpy(ITEM_data(parent) + parent->nbytes - 2, "\r\n", 2);
+    } while (child_id != 0 && ((used + sizeof(child_prefix) + p->size + 2) < parent->nbytes));
+    /* memcpy(ITEM_data(parent) + parent->nbytes - 2, "\r\n", 2); */
+#ifdef UMEMCACHE_DEBUG
+    slabs_check();
+#endif
 }
 
 static int do_slabs_newslab(const unsigned int id) {
@@ -359,15 +455,15 @@ static void *do_slabs_alloc(const size_t size, unsigned int id) {
     if (! (p->sl_curr != 0 || do_slabs_newslab(id) != 0)) {
         /* We don't have more memory available */
         ret = NULL;
-    } else if (p->sl_curr == 0) {
-        //unsigned int new_id = spare_larger_clsid(id);
-        assert(id != 0);
-        p = &slabclass[id];
-        it = (item *)p->slots;
-        p->slots = it->next;
-        if (it->next) it->next->prev = 0;
-        p->sl_curr--;
-        ret = (void *)it;
+    /* } else if (p->sl_curr == 0) { */
+    /*     //unsigned int new_id = spare_larger_clsid(id); */
+    /*     assert(id != 0); */
+    /*     p = &slabclass[id]; */
+    /*     it = (item *)p->slots; */
+    /*     p->slots = it->next; */
+    /*     if (it->next) it->next->prev = 0; */
+    /*     p->sl_curr--; */
+    /*     ret = (void *)it; */
 
     } else if (p->sl_curr != 0) {
         /* return off our freelist */
@@ -1018,3 +1114,5 @@ void stop_slab_maintenance_thread(void) {
     pthread_join(maintenance_tid, NULL);
     pthread_join(rebalance_tid, NULL);
 }
+
+

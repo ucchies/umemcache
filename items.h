@@ -35,6 +35,7 @@ bool parent_empty_nester(item *parent);
  */
 #ifndef UMEMCACHE_DEBUG
 #define UMEMCACHE_DEBUG
+#undef NDEBUG
 #include <sys/time.h>
 
 extern struct timespec extra_start, extra_end, alloc_start, alloc_end;
