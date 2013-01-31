@@ -114,13 +114,14 @@ unsigned int slabs_clsid(const size_t size) {
  */
 unsigned int slabs_idle_clsid(const unsigned int min_id) {
     unsigned int res = 0;
-    int freelist_cnt = 0;
+    unsigned int max_avail = 0;
 
     if (min_id < POWER_SMALLEST) return 0;
     int i;
     for (i = min_id + 1; i < power_largest; i++) {
-        if (freelist_cnt < slabclass[i].sl_curr) {
-            freelist_cnt = slabclass[i].sl_curr;
+        int cls_avail = slabclass[i].sl_curr * slabclass[i].size;
+        if (max_avail < cls_avail) {
+            max_avail = cls_avail;
             res = i;
         }
     }
@@ -128,21 +129,22 @@ unsigned int slabs_idle_clsid(const unsigned int min_id) {
 }
 
 /*Umemcache added 2012_12_05 */
-unsigned int slabs_freq_used_clsid(const size_t max_size) {
-    unsigned int res = 0;
-    size_t size = 0;
+/* 2013_01_26: Revocated */
+/* unsigned int slabs_freq_used_clsid(const size_t max_size) { */
+/*     unsigned int res = 0; */
+/*     size_t size = 0; */
 
-    if (max_size < slabclass[POWER_SMALLEST].size) return 0;
+/*     if (max_size < slabclass[POWER_SMALLEST].size) return 0; */
 
-    int i;
-    for (i = POWER_SMALLEST; slabclass[i].size <= max_size; i++) {
-        if (size < slabclass[i].requested) {
-            size = slabclass[i].requested;
-            res = i;
-        }
-    }
-    return res;
-}
+/*     int i; */
+/*     for (i = POWER_SMALLEST; slabclass[i].size <= max_size; i++) { */
+/*         if (size < slabclass[i].requested) { */
+/*             size = slabclass[i].requested; */
+/*             res = i; */
+/*         } */
+/*     } */
+/*     return res; */
+/* } */
 
 
 /* Umemcache added 2012_12_04 */
@@ -151,8 +153,8 @@ size_t slabs_size(const unsigned int clsid) {
 }
 
 /* Umemcache added 2013_01_05 */
-#ifdef UMEMCACHE_DEBUG
-static void slabs_check(void) {
+#if UMEMCACHE_SLABS_CHK
+static void freelist_check(void) {
     mutex_lock(&slabs_lock);
     slabclass_t *p;
     /* Free list check */
@@ -190,12 +192,37 @@ static void slabs_check(void) {
     mutex_unlock(&slabs_lock);
 }
 
+#ifdef UMEMCACHE_DEBUG
+bool exist_item_in_freelist(item *arg) {
+    slabclass_t *p;
+    //unsigned int *size;
+    /* Item list check */
+    int i;
+    bool ret = false;
+    for (i = POWER_SMALLEST; i <= power_largest - POWER_SMALLEST + 1; i++) {
+        p = &slabclass[i];
+        item *it = NULL;
+        item *next = NULL;
+        for (it = (item *)p->slots; it != NULL; it = next) {
+            if (it == arg) {
+                assert(ret == false);
+                ret = true;
+            }
+            next = it->next;
+            if (it->next == NULL) assert(it == *tail);
+        }
+    }
+    return false;
+}
+#endif /* UMEMCACHE_DEBUG */
+
+
 /* Umemcache added 2013_01_07 */
 /**
  *  @param pointer(an item, child_prefix etc)
  *  return pointer existing in freelist
  */
-/* static void slabs_check_with_ptr(char *ptr) { */
+/* static void freelist_check_with_ptr(char *ptr) { */
 /*     mutex_lock(&slabs_lock); */
 /*     slabclass_t *p; */
 /*     /\* Free list check *\/ */
@@ -232,7 +259,7 @@ static void slabs_check(void) {
 /*     mutex_unlock(&slabs_lock); */
 /* } */
 
-#endif /* UMEMCACHE_DEBUG */
+#endif /* UMEMCACHE_SLABS_CHK */
 
 
 /* 
@@ -366,6 +393,19 @@ static void split_slab_page_into_freelist(char *ptr, const unsigned int id) {
     }
 }
 
+/* Umemcache added 2013_01_10 for debug */
+/* static char *memory_zero_check(char *ptr, size_t len) { */
+/*     char *ret = NULL; */
+/*     unsigned int i; */
+/*     for (i = 0; i < len; i++) { */
+/*         if (*ptr != '\0') { */
+/*             ret = ptr; */
+/*             break; */
+/*         } */
+/*     } */
+/*     return ret; */
+/* } */
+
 /* Umemcache added 2012_11_30 */
 /**
  * @param a parent item
@@ -382,11 +422,15 @@ void split_parent_into_freelist(char *ptr, unsigned int child_id) {
     assert(parent->nbytes <= slabclass[parent->slabs_clsid].size);
     assert(parent->nbytes >= slabclass[child_id].size);
     ptr = ITEM_data(parent);
+
+    //    assert((memory_zero_check(ptr, parent->nbytes)) == NULL);
+
     memset(ptr, 0, parent->nbytes);
 
     do {
         prefix = (child_prefix *)ptr;
         prefix->parent = parent;
+        prefix->slabs_clsid = child_id;
         ptr += sizeof(child_prefix);
         child = (item *)ptr;
         slabs_free(child, 0, child_id);
@@ -395,12 +439,14 @@ void split_parent_into_freelist(char *ptr, unsigned int child_id) {
         used = used + sizeof(child_prefix) + p->size;
         assert(used < parent->nbytes);
         parent->refcount++;
-        child_id = slabs_freq_used_clsid((used < parent->nbytes) ? (parent->nbytes - used) : 0);
-        p = &slabclass[child_id];
-    } while (child_id != 0 && ((used + sizeof(child_prefix) + p->size + 2) < parent->nbytes));
+        //child_id = slabs_freq_used_clsid((used < parent->nbytes) ? (parent->nbytes - used) : 0);
+        //p = &slabclass[child_id];
+    } while (/* child_id != 0 && */ ((used + sizeof(child_prefix) + p->size + 2) < parent->nbytes));
     /* memcpy(ITEM_data(parent) + parent->nbytes - 2, "\r\n", 2); */
-#ifdef UMEMCACHE_DEBUG
-    slabs_check();
+    parent->nbytes = used;
+    assert(parent->refcount > 1);
+#if UMEMCACHE_SLABS_CHK
+    freelist_check();
 #endif
 }
 
@@ -509,6 +555,11 @@ static void do_slabs_free(void *ptr, const size_t size, unsigned int id) {
 
     p->sl_curr++;
     p->requested -= size;
+    
+#ifdef UMEMCACHE_DEBUG
+    assert(!exist_item_in_itemlist(it));
+#endif
+
     return;
 }
 
@@ -540,20 +591,29 @@ bool get_stats(const char *stat_type, int nkey, ADD_STAT add_stats, void *c) {
             item_stats_sizes(add_stats, c);
         }
         /* Umemcache added 2012_10_24 */
+        /* 2013_01_12: Add free_time and free_count */
 #ifdef UMEMCACHE_DEBUG
-        else if (nz_strcmp(nkey, stat_type, "time") == 0) {
+        else if (nz_strcmp(nkey, stat_type, "umemtime") == 0) {
             STATS_LOCK();
             char alloc_time_result[40] = "";
-            char extra_time_result[40] = "";
+            char extra_alloc_time_result[40] = "";
+            char free_time_result[40] = "";
+            char extra_free_time_result[40] = "";
             sprintf(alloc_time_result, "%.10f", alloc_time);
-            sprintf(extra_time_result, "%.10f", extra_time);
-            APPEND_STAT("Slabs Time", "%s", alloc_time_result);
-            APPEND_STAT("Extra Time", "%s", extra_time_result);
-            APPEND_STAT("Extra Count", "%d", extra_count);
+            sprintf(extra_alloc_time_result, "%.10f", extra_alloc_time);
+            sprintf(free_time_result, "%.10f", free_time);
+            sprintf(extra_free_time_result, "%.10f", extra_free_time);
+            APPEND_STAT("Total Alloc Time", "%s", alloc_time_result);
+            APPEND_STAT("Extra Alloc Time", "%s", extra_alloc_time_result);
+            APPEND_STAT("Extra Alloc Count", "%d", extra_alloc_count);
+            APPEND_STAT("Total Free Time", "%s", free_time_result);
+            APPEND_STAT("Extra Free Time", "%s", extra_free_time_result);
+            APPEND_STAT("Extra Free Count", "%d", extra_free_count);
+            add_stats(NULL, 0, NULL, 0, c);
             UMEMCACHE_TIMER_RESET();
             STATS_UNLOCK();
         }
-#endif
+#endif /* UMEMCACHE_DEBUG */
         else {
             ret = false;
         }

@@ -14,14 +14,21 @@
 #include <assert.h>
 
 #ifdef UMEMCACHE_DEBUG
-struct timespec extra_start, extra_end, alloc_start, alloc_end;
-double extra_time, alloc_time;
-int extra_count = 0;
-#endif
+struct timespec extra_alloc_start, extra_alloc_end, alloc_start, alloc_end;
+struct timespec extra_free_start, extra_free_end, free_start, free_end;
+double extra_alloc_time, alloc_time, extra_free_time, free_time;
+int extra_alloc_count = 0;
+int extra_free_count = 0;
+#endif /* UMEMCACHE_DEBUG */
 
 /* Forward Declarations */
 static void item_link_q(item *it);
 static void item_unlink_q(item *it);
+
+/* 2013_01_26: Revocated */
+/* #ifdef UMEMCACHE_DEBUG */
+/* static unsigned int count_child(item *parent); */
+/* #endif */
 
 /*
  * We only reposition items in the LRU queue if they haven't been repositioned
@@ -79,9 +86,8 @@ uint64_t get_cas_id(void) {
 # define DEBUG_REFCNT(it,op) while(0)
 #endif
 
-#ifdef UMEMCACHE_DEBUG
-
-static void items_check(void) {
+#if UMEMCACHE_ITEMS_CHK
+static void itemlist_check(void) {
     mutex_lock(&cache_lock);
     item **head;
     item **tail;
@@ -115,33 +121,36 @@ static void items_check(void) {
     }
     mutex_unlock(&cache_lock);
 }
+#endif /* UMEMCACHE_ITEMS_CHK */
 
-static bool item_search(item *arg) {
-    mutex_lock(&cache_lock);
+#ifdef UMEMCACHE_DEBUG
+bool exist_item_in_itemlist(item *arg) {
     item **head;
+#ifndef NDEBUG
     item **tail;
+#endif
     //unsigned int *size;
     /* Item list check */
     int i;
     bool ret = false;
     for (i = POWER_SMALLEST; i <= LARGEST_ID - POWER_SMALLEST + 1; i++) {
         head = &heads[i];
+#ifndef NDEBUG
         tail = &tails[i];
+#endif
         item *it = NULL;
         item *next = NULL;
         for (it = *head; it != NULL; it = next) {
             if (it == arg) {
-                assert(ret == true);
+                assert(ret == false);
                 ret = true;
             }
             next = it->next;
+            if (it->next == NULL) assert(it == *tail);
         }
-        assert(it == *tail);
     }
-    mutex_unlock(&cache_lock);
-    return false;
+    return ret;
 }
-
 #endif /* UMEMCACHE_DEBUG */
 
 /**
@@ -295,7 +304,11 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_tim
 
 #ifdef UMEMCACHE_DEBUG
     UMEMCACHE_TIMER_END(&alloc_end, &alloc_start, &alloc_time);
-    items_check();
+#endif
+
+#if UMEMCACHE_ITEMS_CHK
+    itemlist_check();
+    assert(!exist_item_in_freelist(it));
 #endif
 
     return it;
@@ -310,8 +323,8 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_tim
 item *do_extra_item_alloc(const size_t ntotal, unsigned int *clsid) {
 
 #ifdef UMEMCACHE_DEBUG
-    UMEMCACHE_EXTRA_COUNT();
-    UMEMCACHE_TIMER_START(&extra_start);
+    UMEMCACHE_EXTRA_ALLOC_COUNT();
+    UMEMCACHE_TIMER_START(&extra_alloc_start);
 #endif
 
     unsigned int new_clsid;
@@ -340,14 +353,14 @@ item *do_extra_item_alloc(const size_t ntotal, unsigned int *clsid) {
     /* } */
     
     parent_ntotal = slabs_size(new_clsid);
-    parent_nbytes = parent_ntotal - sizeof(item) - (settings.use_cas ? sizeof(uint64_t) : 0) - parent_nkey - parent_nsuffix;
+    parent_nbytes = parent_ntotal - sizeof(item) - (settings.use_cas ? sizeof(uint64_t) : 0) - parent_nkey - 1 - parent_nsuffix;
 
 #endif /* UMEMCACHE_DEBUG_MULTIBLOCK */
 
     ret = slabs_alloc(ntotal, new_clsid);
 
 #if !defined(UMEMCACHE_DEBUG) || UMEMCACHE_DEBUG_MULTIBLOCK
-    if (parent_nbytes < ntotal + sizeof(child_prefix) || (ret->it_flags & ITEM_CHILD) != 0)
+    if (parent_nbytes < slabs_size(*clsid) + sizeof(child_prefix) || (ret->it_flags & ITEM_CHILD) != 0)
 #endif
     {
 #if !defined(UMEMCACHE_DEBUG) || UMEMCACHE_DEBUG_SPARELARGER
@@ -391,8 +404,10 @@ item *do_extra_item_alloc(const size_t ntotal, unsigned int *clsid) {
 #endif /* UMEMCACHE_DEBUG_MULTIBLOCK */
 
 #ifdef UMEMCACHE_DEBUG
-    UMEMCACHE_TIMER_END(&extra_end, &extra_start, &extra_time);
+    UMEMCACHE_TIMER_END(&extra_alloc_end, &extra_alloc_start, &extra_alloc_time);
 #endif
+
+    //    if (parent != NULL) assert(parent->refcount == count_child(parent) + 1);
 
     return ret;
 }
@@ -410,31 +425,81 @@ void item_free(item *it) {
     clsid = it->slabs_clsid;
     it->slabs_clsid = 0;
     DEBUG_REFCNT(it, 'F');
-    slabs_free(it, ntotal, clsid);
-}
-
-bool parent_empty_nester(item *parent) {
-    char *ptr = ITEM_data(parent);
-    child_prefix *prefix = (child_prefix *)ptr;
-    item *child;
-    bool ret = true;
-
-    assert(parent != NULL);
-
-    while (strncmp((char *)prefix, "", 1)) {
-        assert(prefix->parent == parent);
-        ptr += sizeof(child_prefix);
-        child = (item *)ptr;
-        assert((child->it_flags & ITEM_CHILD) != 0);
-        assert((child->it_flags & ITEM_SLABBED) == 0);
-        assert(!item_search(child));
-        if ((child->it_flags & ITEM_LINKED) != 0)
-            ret = false;
-        ptr += ITEM_ntotal(child);
-        prefix = (child_prefix *)ptr;
+    if (it->it_flags & ITEM_CHILD) {
+        /* if it is child, don't free */
+#ifdef UMEMCACHE_DEBUG
+        UMEMCACHE_EXTRA_FREE_COUNT();
+        UMEMCACHE_TIMER_START(&extra_free_start);
+#endif
+        item *parent = ((child_prefix *)ITEM_child_prefix(it))->parent;
+        assert((parent->it_flags & ITEM_PARENT) != 0);
+        //        assert(parent->refcount == count_child(parent) + 2);
+        if ((refcount_decr(&parent->refcount) == 1) /*&& (count_child(parent) == 0) */)
+            do_item_remove(parent);
+#ifdef UMEMCACHE_DEBUG
+        UMEMCACHE_TIMER_END(&extra_free_end, &extra_free_start, &extra_free_time);
+#endif
+    } else {
+        slabs_free(it, ntotal, clsid);
     }
-    return ret;
 }
+
+/* 2013_01_21: Revocated */
+/* bool parent_empty_nester(item *parent) { */
+/*     char *ptr = ITEM_data(parent); */
+/*     child_prefix *prefix = NULL; */
+/*     item *child = NULL; */
+/*     size_t remain = parent->nbytes; */
+
+/*     assert(parent != NULL && (parent->it_flags & ITEM_PARENT)); */
+
+/*     while (remain > 0) { */
+/*         prefix = (child_prefix *)ptr; */
+/*         assert(prefix->parent == parent); */
+/*         ptr += sizeof(child_prefix); */
+/*         child = (item *)ptr; */
+/*         assert((child->it_flags & ITEM_CHILD) != 0); */
+/*         assert((child->it_flags & ITEM_SLABBED) == 0); */
+/*         assert(!exist_item_in_itemlist(child)); */
+/*         if ((child->it_flags & ITEM_LINKED) || (child->it_flags & ITEM_SLABBED)) */
+/*             return false; */
+/*         ptr += slabs_size(prefix->slabs_clsid); */
+/*         remain = remain - sizeof(child_prefix) - slabs_size(prefix->slabs_clsid); */
+/*     }  */
+/*     assert(remain == 0); */
+        
+/*     return true; */
+/* } */
+
+/* 2013_01_26: Revocated */
+/* #ifdef UMEMCACHE_DEBUG */
+/* /\* Umemcache: clone of parent_empty_nester *\/ */
+/* static unsigned int count_child(item *parent) { */
+/*     char *ptr = ITEM_data(parent); */
+/*     child_prefix *prefix = NULL; */
+/*     item *child = NULL; */
+/*     size_t remain = parent->nbytes; */
+/*     unsigned int count = 0; */
+
+/*     assert(parent != NULL && (parent->it_flags & ITEM_PARENT)); */
+
+/*     while (remain > 0) { */
+/*         prefix = (child_prefix *)ptr; */
+/*         assert(prefix->parent == parent); */
+/*         ptr += sizeof(child_prefix); */
+/*         child = (item *)ptr; */
+/*         assert(child->it_flags & ITEM_CHILD); */
+/*         ptr += slabs_size(prefix->slabs_clsid); */
+/*         if ((child->it_flags & ITEM_LINKED) || (child->it_flags & ITEM_SLABBED)) */
+/*             count++; */
+/*         remain = remain - sizeof(child_prefix) - slabs_size(prefix->slabs_clsid); */
+/*     }  */
+/*     assert(remain == 0); */
+        
+/*     return count; */
+/* } */
+/* #endif /\* UMEMCACHE_DEBUG *\/ */
+
 
 /**
  * Returns true if an item will fit in the cache (its size does not exceed
@@ -518,6 +583,9 @@ int do_item_link(item *it, const uint32_t hv) {
 }
 
 void do_item_unlink(item *it, const uint32_t hv) {
+#ifdef UMEMCACHE_DEBUG
+    UMEMCACHE_TIMER_START(&free_start);
+#endif
     MEMCACHED_ITEM_UNLINK(ITEM_key(it), it->nkey, it->nbytes);
     mutex_lock(&cache_lock);
     if ((it->it_flags & ITEM_LINKED) != 0) {
@@ -528,22 +596,35 @@ void do_item_unlink(item *it, const uint32_t hv) {
         STATS_UNLOCK();
         assoc_delete(ITEM_key(it), it->nkey, hv);
         item_unlink_q(it);
-        if ((it->it_flags & ITEM_CHILD) == 0) {
-            do_item_remove(it);
-        } else {
-            item *parent = ((child_prefix *)ITEM_child_prefix(it))->parent;
-            /* if(parent_empty_nester(parent)) */
-            /*     do_item_remove(parent); */
-            assert(parent->refcount > 1);
-            if ((refcount_decr(&parent->refcount) == 1) && (parent_empty_nester(parent)))
-                do_item_remove(parent);
-        }
+        /* if ((it->it_flags & ITEM_CHILD) == 0) { */
+/*             do_item_remove(it); */
+/*         } else { */
+/* #ifdef UMEMCACHE_DEBUG */
+/*             UMEMCACHE_EXTRA_FREE_COUNT(); */
+/*             UMEMCACHE_TIMER_START(&extra_free_start); */
+/* #endif */
+/*             item *parent = ((child_prefix *)ITEM_child_prefix(it))->parent; */
+/*             assert((parent->it_flags & ITEM_PARENT) != 0); */
+/*             assert(parent->refcount == count_child(parent) + 1); */
+/*             if ((refcount_decr(&parent->refcount) == 1) && (parent_empty_nester(parent))) */
+/*                 do_item_remove(parent); */
+/* #ifdef UMEMCACHE_DEBUG */
+/*             UMEMCACHE_TIMER_END(&extra_free_end, &extra_free_start, &extra_free_time); */
+/* #endif */
+/*         } */
+        do_item_remove(it);
     }
     mutex_unlock(&cache_lock);
+#ifdef UMEMCACHE_DEBUG
+        UMEMCACHE_TIMER_END(&free_end, &free_start, &free_time);
+#endif
 }
 
 /* FIXME: Is it necessary to keep this copy/pasted code? */
 void do_item_unlink_nolock(item *it, const uint32_t hv) {
+#ifdef UMEMCACHE_DEBUG
+        UMEMCACHE_TIMER_START(&free_start);
+#endif
     MEMCACHED_ITEM_UNLINK(ITEM_key(it), it->nkey, it->nbytes);
     if ((it->it_flags & ITEM_LINKED) != 0) {
         it->it_flags &= ~ITEM_LINKED;
@@ -553,17 +634,27 @@ void do_item_unlink_nolock(item *it, const uint32_t hv) {
         STATS_UNLOCK();
         assoc_delete(ITEM_key(it), it->nkey, hv);
         item_unlink_q(it);
-        if ((it->it_flags & ITEM_CHILD) == 0) {
-            do_item_remove(it);
-        } else {
-            item *parent = ((child_prefix *)ITEM_child_prefix(it))->parent;
-            /* if(parent_empty_nester(parent)) */
-            /*     do_item_remove(parent); */
-            assert(parent->refcount > 1);
-            if ((refcount_decr(&parent->refcount) == 1) && (parent_empty_nester(parent)))
-                do_item_remove(parent);
-        }
+        /* if ((it->it_flags & ITEM_CHILD) == 0) { */
+/*             do_item_remove(it); */
+/*         } else { */
+/* #ifdef UMEMCACHE_DEBUG */
+/*             UMEMCACHE_EXTRA_FREE_COUNT(); */
+/*             UMEMCACHE_TIMER_START(&extra_free_start); */
+/* #endif */
+/*             item *parent = ((child_prefix *)ITEM_child_prefix(it))->parent; */
+/*             assert((parent->it_flags & ITEM_PARENT) != 0); */
+/*             assert(parent->refcount == count_child(parent) + 1); */
+/*             if ((refcount_decr(&parent->refcount) == 1) && (parent_empty_nester(parent))) */
+/*                 do_item_remove(parent); */
+/* #ifdef UMEMCACHE_DEBUG */
+/*             UMEMCACHE_TIMER_END(&extra_free_end, &extra_free_start, &extra_free_time); */
+/* #endif */
+/*         } */
+        do_item_remove(it);
     }
+#ifdef UMEMCACHE_DEBUG
+        UMEMCACHE_TIMER_END(&free_end, &free_start, &free_time);
+#endif
 }
 
 void do_item_remove(item *it) {

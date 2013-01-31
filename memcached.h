@@ -354,8 +354,10 @@ typedef struct _stritem {
 } item;
 
 /* Umemcache added 2012_11_28 */
+/* 2013_01_21: added slabs_clsid */
 typedef struct _child_prefix {
     struct _stritem *parent;
+    unsigned int slabs_clsid;
 } child_prefix;
 
 typedef struct {

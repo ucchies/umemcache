@@ -25,8 +25,11 @@ unsigned int slabs_clsid(const size_t size);
  */
 void split_parent_into_freelist(char *ptr, const unsigned int child_id);
 unsigned int slabs_idle_clsid(const unsigned int min_id);
-unsigned int slabs_freq_used_clsid(const size_t max_size);
+//unsigned int slabs_freq_used_clsid(const size_t max_size);
 size_t slabs_size(const unsigned int clsid);
+
+/*Umemcache added function 2013_01_15 */
+bool exist_item_in_freelist(item *arg);
 
 /** Allocate object of given length. 0 on error */ /*@null@*/
 void *slabs_alloc(const size_t size, unsigned int id);
