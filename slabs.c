@@ -107,7 +107,6 @@ unsigned int slabs_clsid(const size_t size) {
     return res;
 }
 
-
 /*Umemcache added 2012_12_04 */
 /**
  *  @param often-used class id
@@ -150,6 +149,9 @@ unsigned int slabs_idle_clsid(const unsigned int min_id) {
 /* Umemcache added 2012_12_04 */
 size_t slabs_size(const unsigned int clsid) {
     return slabclass[clsid].size;
+}
+unsigned int slabs_freeblocks(const unsigned int clsid) {
+    return slabclass[clsid].sl_curr;
 }
 
 /* Umemcache added 2013_01_05 */
@@ -433,15 +435,15 @@ void split_parent_into_freelist(char *ptr, unsigned int child_id) {
         prefix->slabs_clsid = child_id;
         ptr += sizeof(child_prefix);
         child = (item *)ptr;
-        slabs_free(child, 0, child_id);
         child->it_flags |= ITEM_CHILD;
+        slabs_free(child, 0, child_id);
         ptr += p->size;
         used = used + sizeof(child_prefix) + p->size;
         assert(used < parent->nbytes);
         parent->refcount++;
         //child_id = slabs_freq_used_clsid((used < parent->nbytes) ? (parent->nbytes - used) : 0);
         //p = &slabclass[child_id];
-    } while (/* child_id != 0 && */ ((used + sizeof(child_prefix) + p->size + 2) < parent->nbytes));
+    } while ( /* child_id != 0 && */  ((used + sizeof(child_prefix) + p->size + 2) < parent->nbytes));
     /* memcpy(ITEM_data(parent) + parent->nbytes - 2, "\r\n", 2); */
     parent->nbytes = used;
     assert(parent->refcount > 1);
@@ -521,7 +523,8 @@ static void *do_slabs_alloc(const size_t size, unsigned int id) {
     }
 
     if (ret) {
-        p->requested += size;
+        if ((it->it_flags & ITEM_CHILD) == 0)
+            p->requested += size;
         MEMCACHED_SLABS_ALLOCATE(size, id, p->size, ret);
     } else {
         MEMCACHED_SLABS_ALLOCATE_FAILED(size, id);
@@ -554,7 +557,8 @@ static void do_slabs_free(void *ptr, const size_t size, unsigned int id) {
     p->slots = it;
 
     p->sl_curr++;
-    p->requested -= size;
+    if ((it->it_flags & ITEM_CHILD) == 0)
+        p->requested -= size;
     
 #ifdef UMEMCACHE_DEBUG
     assert(!exist_item_in_itemlist(it));
@@ -647,13 +651,13 @@ static void do_slabs_stats(ADD_STAT add_stats, void *c) {
             APPEND_NUM_STAT(i, "chunks_per_page", "%u", perslab);
             APPEND_NUM_STAT(i, "total_pages", "%u", slabs);
             APPEND_NUM_STAT(i, "total_chunks", "%u", slabs * perslab);
-            APPEND_NUM_STAT(i, "used_chunks", "%u",
+            APPEND_NUM_STAT(i, "used_chunks", "%d",
                             slabs*perslab - p->sl_curr);
             APPEND_NUM_STAT(i, "free_chunks", "%u", p->sl_curr);
             /* Stat is dead, but displaying zero instead of removing it. */
             APPEND_NUM_STAT(i, "free_chunks_end", "%u", 0);
-            APPEND_NUM_STAT(i, "mem_requested", "%llu",
-                            (unsigned long long)p->requested);
+            APPEND_NUM_STAT(i, "mem_requested", "%lld",
+                            (long long)p->requested);
             APPEND_NUM_STAT(i, "get_hits", "%llu",
                     (unsigned long long)thread_stats.slab_stats[i].get_hits);
             APPEND_NUM_STAT(i, "cmd_set", "%llu",

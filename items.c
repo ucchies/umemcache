@@ -51,6 +51,8 @@ typedef struct {
     uint64_t sparelargered;
     uint64_t multiblocked;
     uint64_t extraalloc_failed;
+    uint64_t children;
+    uint64_t parents;
 } itemstats_t;
 
 static item *heads[LARGEST_ID];
@@ -360,7 +362,7 @@ item *do_extra_item_alloc(const size_t ntotal, unsigned int *clsid) {
     ret = slabs_alloc(ntotal, new_clsid);
 
 #if !defined(UMEMCACHE_DEBUG) || UMEMCACHE_DEBUG_MULTIBLOCK
-    if (parent_nbytes < slabs_size(*clsid) + sizeof(child_prefix) || (ret->it_flags & ITEM_CHILD) != 0)
+    if (parent_nbytes < ((slabs_size(*clsid) + sizeof(child_prefix)) * 2) || (ret->it_flags & ITEM_CHILD) != 0)
 #endif
     {
 #if !defined(UMEMCACHE_DEBUG) || UMEMCACHE_DEBUG_SPARELARGER
@@ -434,8 +436,16 @@ void item_free(item *it) {
         item *parent = ((child_prefix *)ITEM_child_prefix(it))->parent;
         assert((parent->it_flags & ITEM_PARENT) != 0);
         //        assert(parent->refcount == count_child(parent) + 2);
-        if ((refcount_decr(&parent->refcount) == 1) /*&& (count_child(parent) == 0) */)
+        /* Child recycle is revocated : 2013_02_07 */
+        /* if (slabs_freeblocks(parent->slabs_clsid) != 0) { */
+        /*     slabs_free(it, ntotal, clsid); */
+        /* }             */
+        /* else */ 
+        if ((refcount_decr(&parent->refcount) == 1) /*&& (count_child(parent) == 0) */) {
+            parent->it_flags &= ~ITEM_PARENT;
             do_item_remove(parent);
+        }
+            
 #ifdef UMEMCACHE_DEBUG
         UMEMCACHE_TIMER_END(&extra_free_end, &extra_free_start, &extra_free_time);
 #endif
